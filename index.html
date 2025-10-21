@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor Data Live Viewer</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f7f9fb; font-family: "Inter", sans-serif; }
+    h1 { margin-top: 1rem; font-weight: 600; }
+    #controls { margin-top: 1rem; margin-bottom: 1rem; }
+    .value-card {
+      background: white; border-radius: 0.75rem; padding: 1rem; 
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align:center;
+    }
+    .plot-container {
+      background: white; border-radius: 0.75rem; padding: 1rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>📱 Live Sensor Dashboard</h1>
+  <p class="text-muted">Stream accelerometer & gyroscope data directly from your mobile sensors.</p>
+
+  <div id="controls" class="d-flex align-items-center gap-3">
+    <label for="rateSelect" class="form-label mb-0">Sampling rate:</label>
+    <input id="rateSelect" type="number" min="1" max="100" value="50" class="form-control w-auto">
+    <button id="toggleButton" class="btn btn-success">Start</button>
+  </div>
+
+  <div class="row text-center">
+    <div class="col-md-6">
+      <div class="value-card">
+        <h5>Accelerometer (m/s²)</h5>
+        <div>X: <span id="ax">0</span></div>
+        <div>Y: <span id="ay">0</span></div>
+        <div>Z: <span id="az">0</span></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="value-card">
+        <h5>Gyroscope (°/s)</h5>
+        <div>X: <span id="gx">0</span></div>
+        <div>Y: <span id="gy">0</span></div>
+        <div>Z: <span id="gz">0</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="plot-container mt-4">
+    <h5>Accelerometer</h5>
+    <div id="accPlot"></div>
+  </div>
+  <div class="plot-container">
+    <h5>Gyroscope</h5>
+    <div id="gyroPlot"></div>
+  </div>
+</div>
+
+<script>
+  let isRunning = false;
+  const toggleBtn = document.getElementById("toggleButton");
+  const rateInput = document.getElementById("rateSelect");
+  const maxDuration = 5; // seconds
+  const accData = {x: [], y: [], z: [], t: []};
+  const gyroData = {x: [], y: [], z: [], t: []};
+  let lastUpdate = 0;
+
+  Plotly.newPlot('accPlot', [
+    {y:[], mode:'lines', name:'X', line:{color:'red'}},
+    {y:[], mode:'lines', name:'Y', line:{color:'green'}},
+    {y:[], mode:'lines', name:'Z', line:{color:'blue'}}
+  ], {margin:{t:10}, xaxis:{title:'Time (s)'}, yaxis:{title:'Acceleration (m/s²)'}});
+
+  Plotly.newPlot('gyroPlot', [
+    {y:[], mode:'lines', name:'X', line:{color:'orange'}},
+    {y:[], mode:'lines', name:'Y', line:{color:'purple'}},
+    {y:[], mode:'lines', name:'Z', line:{color:'teal'}}
+  ], {margin:{t:10}, xaxis:{title:'Time (s)'}, yaxis:{title:'Rotation (°/s)'}});
+
+  function handleMotion(e){
+    const now = performance.now() / 1000;
+    const rate = Math.min(Math.max(parseFloat(rateInput.value) || 50, 1), 100);
+    if(now - lastUpdate < 1/rate) return;
+    lastUpdate = now;
+
+    const ax = e.acceleration?.x ?? 0;
+    const ay = e.acceleration?.y ?? 0;
+    const az = e.acceleration?.z ?? 0;
+    const gx = e.rotationRate?.beta ?? 0;
+    const gy = e.rotationRate?.gamma ?? 0;
+    const gz = e.rotationRate?.alpha ?? 0;
+
+    document.getElementById('ax').textContent = ax.toFixed(2);
+    document.getElementById('ay').textContent = ay.toFixed(2);
+    document.getElementById('az').textContent = az.toFixed(2);
+    document.getElementById('gx').textContent = gx.toFixed(2);
+    document.getElementById('gy').textContent = gy.toFixed(2);
+    document.getElementById('gz').textContent = gz.toFixed(2);
+
+    accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now);
+    gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now);
+
+    // Keep only last 5 seconds
+    const cutoff = now - maxDuration;
+    for (let d of [accData, gyroData]) {
+      while (d.t.length && d.t[0] < cutoff) {
+        d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift();
+      }
+    }
+
+    Plotly.update('accPlot', {
+      x: [accData.t, accData.t, accData.t],
+      y: [accData.x, accData.y, accData.z]
+    });
+    Plotly.update('gyroPlot', {
+      x: [gyroData.t, gyroData.t, gyroData.t],
+      y: [gyroData.x, gyroData.y, gyroData.z]
+    });
+  }
+
+  toggleBtn.onclick = async () => {
+    if(isRunning){
+      window.removeEventListener('devicemotion', handleMotion);
+      toggleBtn.textContent = 'Start';
+      toggleBtn.classList.replace('btn-danger','btn-success');
+      isRunning = false;
+    } else {
+      if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function'){
+        try{ await DeviceMotionEvent.requestPermission(); }catch(e){ alert('Permission denied'); return; }
+      }
+      window.addEventListener('devicemotion', handleMotion);
+      toggleBtn.textContent = 'Stop';
+      toggleBtn.classList.replace('btn-success','btn-danger');
+      isRunning = true;
+    }
+  };
+</script>
+</body>
+</html>
+
