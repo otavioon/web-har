@@ -14,10 +14,15 @@
       background: white; border-radius: 0.75rem; padding: 1rem; 
       box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align:center;
     }
+    .stats-card {
+      background: #fff; border-radius: 0.75rem; padding: 1rem; 
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05); font-size: 0.9rem;
+    }
     .plot-container {
       background: white; border-radius: 0.75rem; padding: 1rem;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 1rem;
     }
+    .smalltext { font-size: 0.9rem; color: #555; }
   </style>
 </head>
 <body>
@@ -40,8 +45,8 @@
     <div class="col-auto">
       <label for="gyroUnit" class="form-label mb-0">Gyro units:</label>
       <select id="gyroUnit" class="form-select">
-        <option value="deg" selected>Degrees/s</option>
-        <option value="rad">Radians/s</option>
+        <option value="deg">Degrees/s</option>
+        <option value="rad" selected>Radians/s</option>
       </select>
     </div>
     <div class="col-auto">
@@ -57,13 +62,28 @@
         <div>Y: <span id="ay">0</span></div>
         <div>Z: <span id="az">0</span></div>
       </div>
+      <div class="stats-card mt-3 text-start">
+        <strong>Accelerometer Stats</strong><br>
+        Mean: X=<span id="accMeanX">0</span>, Y=<span id="accMeanY">0</span>, Z=<span id="accMeanZ">0</span><br>
+        Min: X=<span id="accMinX">0</span>, Y=<span id="accMinY">0</span>, Z=<span id="accMinZ">0</span><br>
+        Max: X=<span id="accMaxX">0</span>, Y=<span id="accMaxY">0</span>, Z=<span id="accMaxZ">0</span><br>
+        Samples: <span id="accSamples">0</span> — Duration: <span id="accDuration">0</span> s
+      </div>
     </div>
+
     <div class="col-md-6">
       <div class="value-card">
-        <h5 id="gyroTitle">Gyroscope (°/s)</h5>
+        <h5 id="gyroTitle">Gyroscope (rad/s)</h5>
         <div>X: <span id="gx">0</span></div>
         <div>Y: <span id="gy">0</span></div>
         <div>Z: <span id="gz">0</span></div>
+      </div>
+      <div class="stats-card mt-3 text-start">
+        <strong>Gyroscope Stats</strong><br>
+        Mean: X=<span id="gyroMeanX">0</span>, Y=<span id="gyroMeanY">0</span>, Z=<span id="gyroMeanZ">0</span><br>
+        Min: X=<span id="gyroMinX">0</span>, Y=<span id="gyroMinY">0</span>, Z=<span id="gyroMinZ">0</span><br>
+        Max: X=<span id="gyroMaxX">0</span>, Y=<span id="gyroMaxY">0</span>, Z=<span id="gyroMaxZ">0</span><br>
+        Samples: <span id="gyroSamples">0</span> — Duration: <span id="gyroDuration">0</span> s
       </div>
     </div>
   </div>
@@ -73,7 +93,7 @@
     <div id="accPlot"></div>
   </div>
   <div class="plot-container">
-    <h5 id="gyroPlotTitle">Gyroscope (°/s)</h5>
+    <h5 id="gyroPlotTitle">Gyroscope (rad/s)</h5>
     <div id="gyroPlot"></div>
   </div>
 </div>
@@ -87,12 +107,12 @@
 
   const accData = {x: [], y: [], z: [], t: [], ts: []};
   const gyroData = {x: [], y: [], z: [], t: [], ts: []};
-  const maxDuration = 5; // seconds
+  const maxDuration = 5;
   let lastUpdate = 0;
   let maxAccAbs = 1;
   let maxGyroAbs = 1;
+  let startTime = null;
 
-  // Helpers
   const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], {hour12:false});
 
   function setupPlots() {
@@ -105,19 +125,11 @@
       {y:[], mode:'lines', name:'Z', line:{color:'blue'}}
     ], {
       margin:{t:10}, 
-      xaxis:{
-        title:'Elapsed Time (s)',
-        overlaying: 'x2',
-        showgrid:true,
-      },
+      xaxis:{title:'Elapsed Time (s)'},
       xaxis2:{
         title:'Timestamp (HH:MM:SS)',
-        anchor:'y',
-        overlaying:'x',
-        side:'top',
-        tickmode:'array',
-        tickvals:[],
-        ticktext:[]
+        overlaying:'x', side:'top',
+        tickmode:'array', tickvals:[], ticktext:[]
       },
       yaxis:{title:`Acceleration (${accUnit})`, range:[-maxAccAbs, maxAccAbs]}
     });
@@ -128,18 +140,11 @@
       {y:[], mode:'lines', name:'Z', line:{color:'teal'}}
     ], {
       margin:{t:10}, 
-      xaxis:{
-        title:'Elapsed Time (s)',
-        overlaying:'x2',
-      },
+      xaxis:{title:'Elapsed Time (s)'},
       xaxis2:{
         title:'Timestamp (HH:MM:SS)',
-        anchor:'y',
-        overlaying:'x',
-        side:'top',
-        tickmode:'array',
-        tickvals:[],
-        ticktext:[]
+        overlaying:'x', side:'top',
+        tickmode:'array', tickvals:[], ticktext:[]
       },
       yaxis:{title:`Rotation (${gyroUnit})`, range:[-maxGyroAbs, maxGyroAbs]}
     });
@@ -154,7 +159,6 @@
     document.getElementById("gyroTitle").textContent = `Gyroscope (${gyroUnit})`;
     document.getElementById("accPlotTitle").textContent = `Accelerometer (${accUnit})`;
     document.getElementById("gyroPlotTitle").textContent = `Gyroscope (${gyroUnit})`;
-
     Plotly.relayout('accPlot', {'yaxis.title': `Acceleration (${accUnit})`});
     Plotly.relayout('gyroPlot', {'yaxis.title': `Rotation (${gyroUnit})`});
   }
@@ -166,28 +170,20 @@
     const now = performance.now() / 1000;
     const rate = Math.min(Math.max(parseFloat(rateInput.value) || 50, 1), 100);
     if(now - lastUpdate < 1 / rate) return;
+    if(!startTime) startTime = now;
     lastUpdate = now;
 
     const useGravity = accSelect.value === "gravity";
     const accel = useGravity ? e.accelerationIncludingGravity : e.acceleration;
     const rotation = e.rotationRate;
 
-    let ax = accel?.x ?? 0;
-    let ay = accel?.y ?? 0;
-    let az = accel?.z ?? 0;
+    let ax = accel?.x ?? 0, ay = accel?.y ?? 0, az = accel?.z ?? 0;
+    let gx = rotation?.beta ?? 0, gy = rotation?.gamma ?? 0, gz = rotation?.alpha ?? 0;
 
-    let gx = rotation?.beta ?? 0;
-    let gy = rotation?.gamma ?? 0;
-    let gz = rotation?.alpha ?? 0;
-
-    // Gyro unit conversion
     if (gyroUnitSelect.value === "rad") {
-      gx *= Math.PI / 180;
-      gy *= Math.PI / 180;
-      gz *= Math.PI / 180;
+      gx *= Math.PI / 180; gy *= Math.PI / 180; gz *= Math.PI / 180;
     }
 
-    // Update text values
     document.getElementById('ax').textContent = ax.toFixed(2);
     document.getElementById('ay').textContent = ay.toFixed(2);
     document.getElementById('az').textContent = az.toFixed(2);
@@ -195,13 +191,11 @@
     document.getElementById('gy').textContent = gy.toFixed(2);
     document.getElementById('gz').textContent = gz.toFixed(2);
 
-    // Push data
     const realTs = Date.now() / 1000;
     accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now); accData.ts.push(realTs);
     gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now); gyroData.ts.push(realTs);
 
-    // Trim data to last 5s
-    const cutoff = now - 5;
+    const cutoff = now - maxDuration;
     for (let d of [accData, gyroData]) {
       while (d.t.length && d.t[0] < cutoff) {
         d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift(); d.ts.shift();
@@ -215,12 +209,34 @@
 
     Plotly.update('accPlot', {x:[accData.t, accData.t, accData.t], y:[accData.x, accData.y, accData.z]}, {}, [0,1,2]);
     Plotly.relayout('accPlot', {'xaxis2.tickvals': accTicks, 'xaxis2.ticktext': accLabels});
-
     Plotly.update('gyroPlot', {x:[gyroData.t, gyroData.t, gyroData.t], y:[gyroData.x, gyroData.y, gyroData.z]}, {}, [0,1,2]);
     Plotly.relayout('gyroPlot', {'xaxis2.tickvals': gyroTicks, 'xaxis2.ticktext': gyroLabels});
+
+    updateStats();
   }
 
-  // Every 5s, adjust dynamic ranges
+  function mean(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
+
+  function updateStats() {
+    const update = (prefix, data, start) => {
+      document.getElementById(`${prefix}MeanX`).textContent = mean(data.x).toFixed(2);
+      document.getElementById(`${prefix}MeanY`).textContent = mean(data.y).toFixed(2);
+      document.getElementById(`${prefix}MeanZ`).textContent = mean(data.z).toFixed(2);
+      document.getElementById(`${prefix}MinX`).textContent = Math.min(...data.x).toFixed(2);
+      document.getElementById(`${prefix}MinY`).textContent = Math.min(...data.y).toFixed(2);
+      document.getElementById(`${prefix}MinZ`).textContent = Math.min(...data.z).toFixed(2);
+      document.getElementById(`${prefix}MaxX`).textContent = Math.max(...data.x).toFixed(2);
+      document.getElementById(`${prefix}MaxY`).textContent = Math.max(...data.y).toFixed(2);
+      document.getElementById(`${prefix}MaxZ`).textContent = Math.max(...data.z).toFixed(2);
+      document.getElementById(`${prefix}Samples`).textContent = data.x.length;
+      document.getElementById(`${prefix}Duration`).textContent = (performance.now()/1000 - start).toFixed(1);
+    };
+    if(startTime) {
+      update("acc", accData, startTime);
+      update("gyro", gyroData, startTime);
+    }
+  }
+
   setInterval(() => {
     const newAccMax = Math.max(maxAccAbs, ...accData.x.map(Math.abs), ...accData.y.map(Math.abs), ...accData.z.map(Math.abs));
     const newGyroMax = Math.max(maxGyroAbs, ...gyroData.x.map(Math.abs), ...gyroData.y.map(Math.abs), ...gyroData.z.map(Math.abs));
@@ -234,7 +250,6 @@
     }
   }, 5000);
 
-  // Start/stop button
   toggleBtn.onclick = async () => {
     if(isRunning){
       window.removeEventListener('devicemotion', handleMotion);
@@ -245,6 +260,7 @@
       if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function'){
         try{ await DeviceMotionEvent.requestPermission(); }catch(e){ alert('Permission denied'); return; }
       }
+      startTime = null;
       window.addEventListener('devicemotion', handleMotion);
       toggleBtn.textContent = 'Stop';
       toggleBtn.classList.replace('btn-success','btn-danger');
