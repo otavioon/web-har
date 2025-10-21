@@ -23,18 +23,36 @@
 <body>
 <div class="container">
   <h1>📱 Live Sensor Dashboard</h1>
-  <p class="text-muted">Stream accelerometer & gyroscope data directly from your mobile sensors.</p>
+  <p class="text-muted">Stream accelerometer & gyroscope data from your mobile sensors in real time.</p>
 
-  <div id="controls" class="d-flex align-items-center gap-3">
-    <label for="rateSelect" class="form-label mb-0">Sampling rate:</label>
-    <input id="rateSelect" type="number" min="1" max="100" value="50" class="form-control w-auto">
-    <button id="toggleButton" class="btn btn-success">Start</button>
+  <div id="controls" class="row g-3 align-items-center">
+    <div class="col-auto">
+      <label for="rateSelect" class="form-label mb-0">Sampling rate (Hz):</label>
+      <input id="rateSelect" type="number" min="1" max="100" value="50" class="form-control">
+    </div>
+    <div class="col-auto">
+      <label for="accSelect" class="form-label mb-0">Accelerometer type:</label>
+      <select id="accSelect" class="form-select">
+        <option value="linear" selected>Linear (no gravity)</option>
+        <option value="gravity">Including gravity</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <label for="gyroUnit" class="form-label mb-0">Gyro units:</label>
+      <select id="gyroUnit" class="form-select">
+        <option value="deg" selected>Degrees/s</option>
+        <option value="rad">Radians/s</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <button id="toggleButton" class="btn btn-success mt-3">Start</button>
+    </div>
   </div>
 
   <div class="row text-center">
     <div class="col-md-6">
       <div class="value-card">
-        <h5>Accelerometer (m/s²)</h5>
+        <h5 id="accTitle">Accelerometer (m/s²)</h5>
         <div>X: <span id="ax">0</span></div>
         <div>Y: <span id="ay">0</span></div>
         <div>Z: <span id="az">0</span></div>
@@ -42,7 +60,7 @@
     </div>
     <div class="col-md-6">
       <div class="value-card">
-        <h5>Gyroscope (°/s)</h5>
+        <h5 id="gyroTitle">Gyroscope (°/s)</h5>
         <div>X: <span id="gx">0</span></div>
         <div>Y: <span id="gy">0</span></div>
         <div>Z: <span id="gz">0</span></div>
@@ -51,11 +69,11 @@
   </div>
 
   <div class="plot-container mt-4">
-    <h5>Accelerometer</h5>
+    <h5 id="accPlotTitle">Accelerometer (m/s²)</h5>
     <div id="accPlot"></div>
   </div>
   <div class="plot-container">
-    <h5>Gyroscope</h5>
+    <h5 id="gyroPlotTitle">Gyroscope (°/s)</h5>
     <div id="gyroPlot"></div>
   </div>
 </div>
@@ -64,36 +82,112 @@
   let isRunning = false;
   const toggleBtn = document.getElementById("toggleButton");
   const rateInput = document.getElementById("rateSelect");
+  const accSelect = document.getElementById("accSelect");
+  const gyroUnitSelect = document.getElementById("gyroUnit");
+
+  const accData = {x: [], y: [], z: [], t: [], ts: []};
+  const gyroData = {x: [], y: [], z: [], t: [], ts: []};
   const maxDuration = 5; // seconds
-  const accData = {x: [], y: [], z: [], t: []};
-  const gyroData = {x: [], y: [], z: [], t: []};
   let lastUpdate = 0;
+  let maxAccAbs = 1;
+  let maxGyroAbs = 1;
 
-  Plotly.newPlot('accPlot', [
-    {y:[], mode:'lines', name:'X', line:{color:'red'}},
-    {y:[], mode:'lines', name:'Y', line:{color:'green'}},
-    {y:[], mode:'lines', name:'Z', line:{color:'blue'}}
-  ], {margin:{t:10}, xaxis:{title:'Time (s)'}, yaxis:{title:'Acceleration (m/s²)'}});
+  // Helpers
+  const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], {hour12:false});
 
-  Plotly.newPlot('gyroPlot', [
-    {y:[], mode:'lines', name:'X', line:{color:'orange'}},
-    {y:[], mode:'lines', name:'Y', line:{color:'purple'}},
-    {y:[], mode:'lines', name:'Z', line:{color:'teal'}}
-  ], {margin:{t:10}, xaxis:{title:'Time (s)'}, yaxis:{title:'Rotation (°/s)'}});
+  function setupPlots() {
+    const accUnit = "m/s²";
+    const gyroUnit = gyroUnitSelect.value === "rad" ? "rad/s" : "°/s";
+
+    Plotly.newPlot('accPlot', [
+      {y:[], mode:'lines', name:'X', line:{color:'red'}},
+      {y:[], mode:'lines', name:'Y', line:{color:'green'}},
+      {y:[], mode:'lines', name:'Z', line:{color:'blue'}}
+    ], {
+      margin:{t:10}, 
+      xaxis:{
+        title:'Elapsed Time (s)',
+        overlaying: 'x2',
+        showgrid:true,
+      },
+      xaxis2:{
+        title:'Timestamp (HH:MM:SS)',
+        anchor:'y',
+        overlaying:'x',
+        side:'top',
+        tickmode:'array',
+        tickvals:[],
+        ticktext:[]
+      },
+      yaxis:{title:`Acceleration (${accUnit})`, range:[-maxAccAbs, maxAccAbs]}
+    });
+
+    Plotly.newPlot('gyroPlot', [
+      {y:[], mode:'lines', name:'X', line:{color:'orange'}},
+      {y:[], mode:'lines', name:'Y', line:{color:'purple'}},
+      {y:[], mode:'lines', name:'Z', line:{color:'teal'}}
+    ], {
+      margin:{t:10}, 
+      xaxis:{
+        title:'Elapsed Time (s)',
+        overlaying:'x2',
+      },
+      xaxis2:{
+        title:'Timestamp (HH:MM:SS)',
+        anchor:'y',
+        overlaying:'x',
+        side:'top',
+        tickmode:'array',
+        tickvals:[],
+        ticktext:[]
+      },
+      yaxis:{title:`Rotation (${gyroUnit})`, range:[-maxGyroAbs, maxGyroAbs]}
+    });
+  }
+
+  setupPlots();
+
+  function updateTitles() {
+    const accUnit = "m/s²";
+    const gyroUnit = gyroUnitSelect.value === "rad" ? "rad/s" : "°/s";
+    document.getElementById("accTitle").textContent = `Accelerometer (${accUnit})`;
+    document.getElementById("gyroTitle").textContent = `Gyroscope (${gyroUnit})`;
+    document.getElementById("accPlotTitle").textContent = `Accelerometer (${accUnit})`;
+    document.getElementById("gyroPlotTitle").textContent = `Gyroscope (${gyroUnit})`;
+
+    Plotly.relayout('accPlot', {'yaxis.title': `Acceleration (${accUnit})`});
+    Plotly.relayout('gyroPlot', {'yaxis.title': `Rotation (${gyroUnit})`});
+  }
+
+  gyroUnitSelect.addEventListener('change', updateTitles);
+  accSelect.addEventListener('change', updateTitles);
 
   function handleMotion(e){
     const now = performance.now() / 1000;
     const rate = Math.min(Math.max(parseFloat(rateInput.value) || 50, 1), 100);
-    if(now - lastUpdate < 1/rate) return;
+    if(now - lastUpdate < 1 / rate) return;
     lastUpdate = now;
 
-    const ax = e.acceleration?.x ?? 0;
-    const ay = e.acceleration?.y ?? 0;
-    const az = e.acceleration?.z ?? 0;
-    const gx = e.rotationRate?.beta ?? 0;
-    const gy = e.rotationRate?.gamma ?? 0;
-    const gz = e.rotationRate?.alpha ?? 0;
+    const useGravity = accSelect.value === "gravity";
+    const accel = useGravity ? e.accelerationIncludingGravity : e.acceleration;
+    const rotation = e.rotationRate;
 
+    let ax = accel?.x ?? 0;
+    let ay = accel?.y ?? 0;
+    let az = accel?.z ?? 0;
+
+    let gx = rotation?.beta ?? 0;
+    let gy = rotation?.gamma ?? 0;
+    let gz = rotation?.alpha ?? 0;
+
+    // Gyro unit conversion
+    if (gyroUnitSelect.value === "rad") {
+      gx *= Math.PI / 180;
+      gy *= Math.PI / 180;
+      gz *= Math.PI / 180;
+    }
+
+    // Update text values
     document.getElementById('ax').textContent = ax.toFixed(2);
     document.getElementById('ay').textContent = ay.toFixed(2);
     document.getElementById('az').textContent = az.toFixed(2);
@@ -101,27 +195,46 @@
     document.getElementById('gy').textContent = gy.toFixed(2);
     document.getElementById('gz').textContent = gz.toFixed(2);
 
-    accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now);
-    gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now);
+    // Push data
+    const realTs = Date.now() / 1000;
+    accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now); accData.ts.push(realTs);
+    gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now); gyroData.ts.push(realTs);
 
-    // Keep only last 5 seconds
-    const cutoff = now - maxDuration;
+    // Trim data to last 5s
+    const cutoff = now - 5;
     for (let d of [accData, gyroData]) {
       while (d.t.length && d.t[0] < cutoff) {
-        d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift();
+        d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift(); d.ts.shift();
       }
     }
 
-    Plotly.update('accPlot', {
-      x: [accData.t, accData.t, accData.t],
-      y: [accData.x, accData.y, accData.z]
-    });
-    Plotly.update('gyroPlot', {
-      x: [gyroData.t, gyroData.t, gyroData.t],
-      y: [gyroData.x, gyroData.y, gyroData.z]
-    });
+    const accTicks = accData.t.filter((_,i)=>i%10===0);
+    const accLabels = accData.ts.filter((_,i)=>i%10===0).map(fmtTime);
+    const gyroTicks = gyroData.t.filter((_,i)=>i%10===0);
+    const gyroLabels = gyroData.ts.filter((_,i)=>i%10===0).map(fmtTime);
+
+    Plotly.update('accPlot', {x:[accData.t, accData.t, accData.t], y:[accData.x, accData.y, accData.z]}, {}, [0,1,2]);
+    Plotly.relayout('accPlot', {'xaxis2.tickvals': accTicks, 'xaxis2.ticktext': accLabels});
+
+    Plotly.update('gyroPlot', {x:[gyroData.t, gyroData.t, gyroData.t], y:[gyroData.x, gyroData.y, gyroData.z]}, {}, [0,1,2]);
+    Plotly.relayout('gyroPlot', {'xaxis2.tickvals': gyroTicks, 'xaxis2.ticktext': gyroLabels});
   }
 
+  // Every 5s, adjust dynamic ranges
+  setInterval(() => {
+    const newAccMax = Math.max(maxAccAbs, ...accData.x.map(Math.abs), ...accData.y.map(Math.abs), ...accData.z.map(Math.abs));
+    const newGyroMax = Math.max(maxGyroAbs, ...gyroData.x.map(Math.abs), ...gyroData.y.map(Math.abs), ...gyroData.z.map(Math.abs));
+    if (newAccMax > maxAccAbs) {
+      maxAccAbs = newAccMax;
+      Plotly.relayout('accPlot', {'yaxis.range': [-maxAccAbs, maxAccAbs]});
+    }
+    if (newGyroMax > maxGyroAbs) {
+      maxGyroAbs = newGyroMax;
+      Plotly.relayout('gyroPlot', {'yaxis.range': [-maxGyroAbs, maxGyroAbs]});
+    }
+  }, 5000);
+
+  // Start/stop button
   toggleBtn.onclick = async () => {
     if(isRunning){
       window.removeEventListener('devicemotion', handleMotion);
