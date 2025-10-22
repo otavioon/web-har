@@ -36,7 +36,7 @@
     <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
       <label class="form-label mb-0">Model:</label>
       <select id="modelSelect" class="form-select w-auto">
-        <!-- Filled at runtime; falls back to convnet.onnx -->
+        <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
       </select>
       <span id="modelStatus" class="badge-soft">not loaded</span>
 
@@ -99,7 +99,7 @@ const CLASSES=["sit","stand","walk","climb up","climb down","run"];
 const CLASS_EMOJI = {
   "sit":"🪑", "stand":"🧍", "walk":"🚶", "climb up":"🪜⬆️", "climb down":"🪜⬇️", "run":"🏃"
 };
-let session=null, creatingSession=false, currentModel="models/convnet.onnx";
+let session=null, creatingSession=false, currentModel="models/cnnpf_loo_ms_erm.onnx";
 let isRunning=false, loopRunning=false;
 let buffer=[];
 let SAMPLE_RATE=20;
@@ -185,8 +185,8 @@ async function discoverModels() {
   } catch {}
 
   // 3) Final fallbacks
-  // If you always have a default at models/convnet.onnx, list that
-  return [`${MODELS_DIR}convnet.onnx`];
+  // If you always have a default at models/cnnpf_loo_ms_erm.onnx, list that
+  return [`${MODELS_DIR}cnnpf_loo_ms_erm.onnx`];
 }
 
 async function populateModelDropdown() {
