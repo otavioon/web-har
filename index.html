@@ -98,7 +98,7 @@ const CLASSES=["sit","stand","walk","climb up","climb down","run"];
 const CLASS_EMOJI = {
   "sit":"🪑", "stand":"🧍", "walk":"🚶", "climb up":"🪜⬆️", "climb down":"🪜⬇️", "run":"🏃"
 };
-let session=null, creatingSession=false, currentModel="convnet.onnx";
+let session=null, creatingSession=false, currentModel="models/convnet.onnx";
 let isRunning=false, loopRunning=false;
 let buffer=[];
 let SAMPLE_RATE=20;
@@ -207,25 +207,44 @@ async function populateModelDropdown() {
   document.getElementById("modelStatus").textContent = currentModel.replace(/^models\//, "");
 }
 
+document.getElementById("modelSelect").addEventListener("change", async (e)=>{
+  currentModel = e.target.value;
+  document.getElementById("modelStatus").textContent = currentModel.replace(/^models\//, "");
+  log(`Model changed to: ${currentModel}`);
+  await createSession(); // now loads fresh bytes (no cache)
+});
+
+
 /* ====== MODEL LOAD / RELOAD ====== */
 async function createSession(){
   if (creatingSession) { log("createSession() already in progress"); return; }
   creatingSession = true;
+
   try{
-    document.getElementById("predActivity").textContent="–";
-    document.getElementById("predEmoji").textContent="–";
+    // show loading
+    document.getElementById("predActivity").textContent = "–";
+    document.getElementById("predEmoji").textContent = "–";
     document.getElementById("modelStatus").textContent = "loading...";
-    log(`Loading ${currentModel} (WASM, single-thread) ...`);
+    const modelPath = currentModel; // snapshot in case user switches quickly
+    log(`Loading ${modelPath} (WASM, single-thread) ...`);
 
     // Safe WASM config for sensors
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.simd = true;
     ort.env.wasm.proxy = false;
-    ort.env.logLevel = "warning"; // set to "verbose" if you want deeper logs
+    ort.env.logLevel = "warning"; // "verbose" if you want deeper logs
 
-    session = await ort.InferenceSession.create(currentModel, { executionProviders: ["wasm"] });
-    document.getElementById("modelStatus").textContent = currentModel;
-    log(`Model loaded: ${currentModel}`, "ok");
+    // 💡 Force a fresh fetch (no cache), then create session from bytes
+    // Also set session=null to make the loop skip a cycle while we rebuild.
+    session = null;
+    const resp = await fetch(modelPath, { cache: "no-store" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} loading ${modelPath}`);
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+
+    session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+
+    document.getElementById("modelStatus").textContent = modelPath.replace(/^models\//, "");
+    log(`Model loaded: ${modelPath}`, "ok");
   } catch (e){
     log("Failed to create session: "+e, "err");
     session = null;
@@ -234,6 +253,7 @@ async function createSession(){
     creatingSession = false;
   }
 }
+
 
 /* ====== SENSOR / DEBUG FEED ====== */
 function pushSample(ax,ay,az,gx,gy,gz,now){
