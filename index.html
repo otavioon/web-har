@@ -21,10 +21,11 @@
     .plot-container{background:white;border-radius:.75rem;padding:1rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:1rem;}
     .small-text{font-size:.9rem;color:#555;}
     #consoleBox{
-      background:#111;color:#0f0;font-family:monospace;font-size:.85rem;
-      text-align:left;overflow-y:auto;max-height:180px;padding:.5rem;border-radius:.5rem;
+      background:#111;color:#0f0;font-family:monospace;font-size:.9rem;
+      text-align:left;overflow-y:auto;max-height:260px;padding:.5rem;border-radius:.5rem;
       white-space:pre-wrap; word-wrap:break-word;
     }
+    .badge-soft { background: #f1f5ff; color: #335; border-radius: .5rem; padding:.2rem .5rem; }
   </style>
 </head>
 
@@ -33,7 +34,13 @@
     <h1>📱 WebHAR – Real-Time HAR Dashboard</h1>
 
     <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
-      <label class="form-label mb-0">Rate (Hz):</label>
+      <label class="form-label mb-0">Model:</label>
+      <select id="modelSelect" class="form-select w-auto">
+        <!-- Filled at runtime; falls back to convnet.onnx -->
+      </select>
+      <span id="modelStatus" class="badge-soft">not loaded</span>
+
+      <label class="form-label mb-0 ms-3">Rate (Hz):</label>
       <input id="rateSelect" type="number" min="1" max="100" value="20" class="form-control w-auto" />
       <label class="form-label mb-0">Gyro:</label>
       <select id="gyroUnit" class="form-select w-auto"><option value="rads" selected>rad/s</option><option value="degs">°/s</option></select>
@@ -62,7 +69,11 @@
     </div>
 
     <div class="prediction-card mt-4">
-      Predicted Activity: <span id="predActivity">–</span><br>
+      Predicted Activity:
+      <div style="font-size:2rem; line-height:1.2;">
+        <span id="predEmoji">–</span>
+        <span id="predActivity">–</span>
+      </div>
       <span id="predTime">Last inference: –</span><br>
       <span id="predLatency">Inference time: –</span>
       <div class="small-text mt-1" id="loopStatus">Loop: idle</div>
@@ -84,8 +95,11 @@
 <script>
 /* ====== CONFIG / STATE ====== */
 const CLASSES=["sit","stand","walk","climb up","climb down","run"];
-let session=null, creatingSession=false;
-let isRunning=false;
+const CLASS_EMOJI = {
+  "sit":"🪑", "stand":"🧍", "walk":"🚶", "climb up":"🪜⬆️", "climb down":"🪜⬇️", "run":"🏃"
+};
+let session=null, creatingSession=false, currentModel="convnet.onnx";
+let isRunning=false, loopRunning=false;
 let buffer=[];
 let SAMPLE_RATE=20;
 const WINDOW_SEC=3, STEP_SEC=1;
@@ -93,6 +107,8 @@ let SAMPLES_PER_WINDOW=WINDOW_SEC*SAMPLE_RATE;
 const STEP_INTERVAL=STEP_SEC*1000;
 let startTime=null, debugTimer=null;
 let lastSampleTs=0; // throttle devicemotion
+const INFERENCE_TIMEOUT_MS = 4000;
+let inferenceCount = 0;
 
 /* ====== CONSOLE LOG ====== */
 function log(msg, type="info"){
@@ -101,7 +117,7 @@ function log(msg, type="info"){
   const safe=String(msg).replace(/</g,"&lt;").replace(/>/g,"&gt;");
   const color = type==="err" ? "#f55" : type==="ok" ? "#7f7" : "#0f0";
   box.innerHTML += `<span style="color:${color}">[${time}] ${safe}</span><br>`;
-  const lines=box.innerHTML.split("<br>"); if(lines.length>400) box.innerHTML=lines.slice(-400).join("<br>");
+  const lines=box.innerHTML.split("<br>"); if(lines.length>600) box.innerHTML=lines.slice(-600).join("<br>");
   box.scrollTop=box.scrollHeight;
   (type==="err"?console.error:console.log)(msg);
 }
@@ -119,26 +135,67 @@ Plotly.newPlot('gyroPlot',[
   {y:[],mode:'lines',name:'Z',line:{color:'teal'}}
 ],{margin:{t:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
+/* ====== MODEL DISCOVERY ====== */
+async function discoverModels(){
+  try{
+    // fetch directory listing (works with python -m http.server and many static servers)
+    const dir = window.location.pathname.replace(/[^\/]*$/, ""); // current folder
+    const res = await fetch(dir);
+    const html = await res.text();
+    const matches = [...html.matchAll(/href="([^"]+\.onnx)"/gi)].map(m => decodeURIComponent(m[1]));
+    const localOnly = matches.filter(h => !h.startsWith("http"));
+    const unique = [...new Set(localOnly)];
+    return unique.length ? unique : ["convnet.onnx"];
+  }catch(e){
+    log("Model discovery failed; falling back to convnet.onnx", "err");
+    return ["convnet.onnx"];
+  }
+}
+
+async function populateModelDropdown(){
+  const sel = document.getElementById("modelSelect");
+  const models = await discoverModels();
+  sel.innerHTML = "";
+  models.forEach(m=>{
+    const opt = document.createElement("option");
+    opt.value = m; opt.textContent = m;
+    if (m === currentModel) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (!models.includes(currentModel)) currentModel = models[0];
+  document.getElementById("modelStatus").textContent = currentModel;
+}
+
+document.getElementById("modelSelect").addEventListener("change", async (e)=>{
+  currentModel = e.target.value;
+  document.getElementById("modelStatus").textContent = currentModel;
+  log(`Model changed to: ${currentModel}`);
+  await createSession(); // rebuild with the new model
+});
+
 /* ====== MODEL LOAD / RELOAD ====== */
 async function createSession(){
   if (creatingSession) { log("createSession() already in progress"); return; }
   creatingSession = true;
   try{
-    document.getElementById("predActivity").textContent="Loading model...";
-    log("Loading convnet.onnx (WASM, single-thread) ...");
+    document.getElementById("predActivity").textContent="–";
+    document.getElementById("predEmoji").textContent="–";
+    document.getElementById("modelStatus").textContent = "loading...";
+    log(`Loading ${currentModel} (WASM, single-thread) ...`);
 
     // Safe WASM config for sensors
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.simd = true;
     ort.env.wasm.proxy = false;
-    ort.env.logLevel = "warning"; // change to "verbose" for deep debugging
+    ort.env.logLevel = "warning"; // set to "verbose" if you want deeper logs
 
-    session = await ort.InferenceSession.create("convnet.onnx", { executionProviders: ["wasm"] });
-    document.getElementById("predActivity").textContent="Model ready ✅";
-    log("Model loaded.", "ok");
+    session = await ort.InferenceSession.create(currentModel, { executionProviders: ["wasm"] });
+    document.getElementById("modelStatus").textContent = currentModel;
+    log(`Model loaded: ${currentModel}`, "ok");
   } catch (e){
     log("Failed to create session: "+e, "err");
     session = null;
+    document.getElementById("modelStatus").textContent = "load error";
   } finally {
     creatingSession = false;
   }
@@ -178,9 +235,11 @@ function updateStats(now){
 }
 
 // Throttled real sensor handler
+let lastHz=20;
 function handleMotion(e){
   if(!isRunning) return;
   const targetHz = parseFloat(document.getElementById("rateSelect").value)||20;
+  if (targetHz !== lastHz) { lastHz = targetHz; SAMPLES_PER_WINDOW = WINDOW_SEC * targetHz; }
   const interval = 1000/targetHz;
   const nowTs = performance.now();
   if (nowTs - lastSampleTs < interval) return; // throttle
@@ -216,44 +275,41 @@ function startDebugMode(){
 function stopDebugMode(){ if(debugTimer) clearInterval(debugTimer); debugTimer=null; }
 
 /* ====== INFERENCE SAFE RUN + WATCHDOG ====== */
-const INFERENCE_TIMEOUT_MS = 4000; // consider run hung if longer than this
-
 function timeoutPromise(ms){
   return new Promise((_, rej) => setTimeout(()=>rej(new Error(`watchdog timeout after ${ms}ms`)), ms));
 }
-
 async function safeRun(tensor){
-  // Race session.run vs watchdog timeout
-  return Promise.race([
-    session.run({ input: tensor }),
-    timeoutPromise(INFERENCE_TIMEOUT_MS)
-  ]);
+  return Promise.race([ session.run({ input: tensor }), timeoutPromise(INFERENCE_TIMEOUT_MS) ]);
 }
 
 async function performInference(){
   if(!isRunning) return;
   if(!session){ log("⚠️ No session; skipping inference."); return; }
-  if(buffer.length < SAMPLES_PER_WINDOW){ return; }
+  const effectiveSamples = WINDOW_SEC * (parseFloat(document.getElementById("rateSelect").value)||20);
+  if(buffer.length < effectiveSamples){ return; }
 
-  const arr=buffer.slice(-SAMPLES_PER_WINDOW);
-  const tensor=new ort.Tensor("float32", new Float32Array(arr.flat()), [1,6,60]);
+  const arr=buffer.slice(-effectiveSamples);
+  const tensor=new ort.Tensor("float32", new Float32Array(arr.flat()), [1,6,60]); // model expects 60 @ 20Hz*3s
   const t0=performance.now();
-
   try{
     document.getElementById("loopStatus").textContent="Loop: running";
-    log(`🧠 Running inference... (buffer=${buffer.length})`);
-    const out = await safeRun(tensor);  // <-- watchdog-protected run
+    inferenceCount += 1;
+    log(`🧠 [#${inferenceCount}] Running inference... (buffer=${buffer.length})`);
+    const out = await safeRun(tensor);
     const latency = performance.now()-t0;
     const data = out[Object.keys(out)[0]].data;
     const pred = data.indexOf(Math.max(...data));
+    const label = CLASSES[pred];
+    const emoji = CLASS_EMOJI[label] || "🤖";
     const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    document.getElementById("predActivity").textContent=CLASSES[pred];
-    document.getElementById("predTime").textContent="Last inference: "+ts;
-    document.getElementById("predLatency").textContent="Inference time: "+latency.toFixed(1)+" ms";
-    log(`✅ Pred=${CLASSES[pred]} | latency=${latency.toFixed(1)} ms`, "ok");
+
+    document.getElementById("predEmoji").textContent = emoji;
+    document.getElementById("predActivity").textContent = label;
+    document.getElementById("predTime").textContent = "Last inference: " + ts;
+    document.getElementById("predLatency").textContent = "Inference time: " + latency.toFixed(1) + " ms";
+    log(`✅ [#${inferenceCount}] Pred=${label} | latency=${latency.toFixed(1)} ms`, "ok");
   } catch(err){
-    log(`❌ Inference error: ${err}`, "err");
-    // If we timed out or had a run-level error, try to rebuild the session once
+    log(`❌ [#${inferenceCount}] Inference error: ${err}`, "err");
     await rebuildSessionIfNeeded(err);
   } finally {
     document.getElementById("loopStatus").textContent="Loop: idle";
@@ -262,7 +318,6 @@ async function performInference(){
 
 async function rebuildSessionIfNeeded(err){
   if(!isRunning) return;
-  // only rebuild on watchdog timeout or known fatal errors
   const msg = String(err||"");
   if (msg.includes("watchdog") || msg.includes("abort") || msg.includes("no available backend")) {
     log("🔁 Recreating session due to watchdog/fatal error...");
@@ -271,7 +326,6 @@ async function rebuildSessionIfNeeded(err){
 }
 
 /* ====== SEQUENTIAL LOOP (NO setInterval) ====== */
-let loopRunning=false;
 async function startInferenceLoop(){
   if(loopRunning){ log("Loop already running"); return; }
   loopRunning = true;
@@ -283,8 +337,7 @@ async function startInferenceLoop(){
         log("⚠️ Session missing; attempting to recreate...");
         await createSession();
       }
-      await performInference(); // never overlaps
-      // If stopped mid-await, break early
+      await performInference();
       if(!isRunning) break;
       await new Promise(r=>setTimeout(r, STEP_INTERVAL));
     }
@@ -299,23 +352,22 @@ document.getElementById("toggleButton").onclick = async ()=>{
 
   if(isRunning){
     isRunning=false;
-    window.removeEventListener("devicemotion", handleMotion);
+    window.removeEventListener("devicemotion",handleMotion);
     stopDebugMode();
     document.getElementById("toggleButton").textContent="Start";
     document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
     log("Stopped.");
   } else {
     isRunning=true;
-    startTime=null; lastSampleTs=0; buffer.length=0;
+    startTime=null; lastSampleTs=0; buffer.length=0; inferenceCount = 0;
     const debug=document.getElementById("debugMode").checked;
     if(debug){
       startDebugMode(); log("Debug mode active.");
     } else {
-      // iOS permission gate
       if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
         try{ await DeviceMotionEvent.requestPermission(); } catch(e){ alert("Permission denied"); isRunning=false; return; }
       }
-      window.addEventListener("devicemotion", handleMotion); // no passive:true here
+      window.addEventListener("devicemotion",handleMotion);
       log("Sensor capture started.");
     }
     startInferenceLoop();
@@ -324,7 +376,6 @@ document.getElementById("toggleButton").onclick = async ()=>{
   }
 };
 
-// Manual inference restart (recreate session & restart loop without toggling sensors)
 document.getElementById("restartBtn").onclick = async ()=>{
   log("🔄 Manual restart requested.");
   await createSession();
@@ -332,7 +383,11 @@ document.getElementById("restartBtn").onclick = async ()=>{
 };
 
 /* ====== BOOT ====== */
-createSession(); // pre-load on page open
+(async function boot(){
+  await populateModelDropdown();
+  log(`Initial model: ${currentModel}`);
+  await createSession(); // pre-load
+})();
 </script>
 </body>
 </html>
