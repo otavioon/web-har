@@ -1,1 +1,0 @@
-Couldn't find the requested file /dist/ort-worker.js in onnxruntime-web.
