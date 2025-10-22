@@ -1,0 +1,21 @@
+name: webhar
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cpuonly        # Remove this line if you want GPU support
+  - onnx
+  - onnxruntime
+  - pip
+  - pip:
+      - tensorflow
+      - tensorflowjs
+      - jupyter
+      - matplotlib
+      - pandas
+      - scikit-learn
+

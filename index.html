@@ -1,272 +1,338 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sensor Data Live Viewer</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebHAR – Live HAR Dashboard (WASM + Watchdog)</title>
+
+  <!-- Plotly -->
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- ONNXRuntime-Web -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+
   <style>
-    body { background-color: #f7f9fb; font-family: "Inter", sans-serif; }
-    h1 { margin-top: 1rem; font-weight: 600; }
-    #controls { margin-top: 1rem; margin-bottom: 1rem; }
-    .value-card {
-      background: white; border-radius: 0.75rem; padding: 1rem; 
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align:center;
+    body { background:#f5f7fa; font-family:"Inter",sans-serif; padding:1.5rem; }
+    .value-card,.prediction-card,.console-card {
+      background:#fff;border-radius:.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:1rem;text-align:center;
     }
-    .stats-card {
-      background: #fff; border-radius: 0.75rem; padding: 1rem; 
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05); font-size: 0.9rem;
+    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;}
+    .plot-container{background:white;border-radius:.75rem;padding:1rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:1rem;}
+    .small-text{font-size:.9rem;color:#555;}
+    #consoleBox{
+      background:#111;color:#0f0;font-family:monospace;font-size:.85rem;
+      text-align:left;overflow-y:auto;max-height:180px;padding:.5rem;border-radius:.5rem;
+      white-space:pre-wrap; word-wrap:break-word;
     }
-    .plot-container {
-      background: white; border-radius: 0.75rem; padding: 1rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 1rem;
-    }
-    .smalltext { font-size: 0.9rem; color: #555; }
   </style>
 </head>
+
 <body>
-<div class="container">
-  <h1>📱 Live Sensor Dashboard</h1>
-  <p class="text-muted">Stream accelerometer & gyroscope data from your mobile sensors in real time.</p>
+  <div class="container">
+    <h1>📱 WebHAR – Real-Time HAR Dashboard</h1>
 
-  <div id="controls" class="row g-3 align-items-center">
-    <div class="col-auto">
-      <label for="rateSelect" class="form-label mb-0">Sampling rate (Hz):</label>
-      <input id="rateSelect" type="number" min="1" max="100" value="50" class="form-control">
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+      <label class="form-label mb-0">Rate (Hz):</label>
+      <input id="rateSelect" type="number" min="1" max="100" value="20" class="form-control w-auto" />
+      <label class="form-label mb-0">Gyro:</label>
+      <select id="gyroUnit" class="form-select w-auto"><option value="rads" selected>rad/s</option><option value="degs">°/s</option></select>
+      <label class="form-label mb-0">Accel:</label>
+      <select id="accType" class="form-select w-auto"><option value="linear" selected>Linear</option><option value="gravity">Incl. Gravity</option></select>
+      <div class="form-check ms-2"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug</label></div>
+      <button id="toggleButton" class="btn btn-success ms-2">Start</button>
+      <button id="restartBtn" class="btn btn-outline-secondary">Restart Inference</button>
     </div>
-    <div class="col-auto">
-      <label for="accSelect" class="form-label mb-0">Accelerometer type:</label>
-      <select id="accSelect" class="form-select">
-        <option value="linear" selected>Linear (no gravity)</option>
-        <option value="gravity">Including gravity</option>
-      </select>
-    </div>
-    <div class="col-auto">
-      <label for="gyroUnit" class="form-label mb-0">Gyro units:</label>
-      <select id="gyroUnit" class="form-select">
-        <option value="deg">Degrees/s</option>
-        <option value="rad" selected>Radians/s</option>
-      </select>
-    </div>
-    <div class="col-auto">
-      <button id="toggleButton" class="btn btn-success mt-3">Start</button>
-    </div>
-  </div>
 
-  <div class="row text-center">
-    <div class="col-md-6">
-      <div class="value-card">
-        <h5 id="accTitle">Accelerometer (m/s²)</h5>
-        <div>X: <span id="ax">0</span></div>
-        <div>Y: <span id="ay">0</span></div>
-        <div>Z: <span id="az">0</span></div>
+    <div class="row text-center">
+      <div class="col-md-6">
+        <div class="value-card">
+          <h5>Accelerometer (<span id="accUnit">m/s²</span>)</h5>
+          <div>X:<span id="ax">0</span> &nbsp; Y:<span id="ay">0</span> &nbsp; Z:<span id="az">0</span></div>
+          <hr><div id="accStats" class="small-text"></div>
+        </div>
       </div>
-      <div class="stats-card mt-3 text-start">
-        <strong>Accelerometer Stats</strong><br>
-        Mean: X=<span id="accMeanX">0</span>, Y=<span id="accMeanY">0</span>, Z=<span id="accMeanZ">0</span><br>
-        Min: X=<span id="accMinX">0</span>, Y=<span id="accMinY">0</span>, Z=<span id="accMinZ">0</span><br>
-        Max: X=<span id="accMaxX">0</span>, Y=<span id="accMaxY">0</span>, Z=<span id="accMaxZ">0</span><br>
-        Samples: <span id="accSamples">0</span> — Duration: <span id="accDuration">0</span> s
+      <div class="col-md-6">
+        <div class="value-card">
+          <h5>Gyroscope (<span id="gyroUnitLabel">rad/s</span>)</h5>
+          <div>X:<span id="gx">0</span> &nbsp; Y:<span id="gy">0</span> &nbsp; Z:<span id="gz">0</span></div>
+          <hr><div id="gyroStats" class="small-text"></div>
+        </div>
       </div>
     </div>
 
-    <div class="col-md-6">
-      <div class="value-card">
-        <h5 id="gyroTitle">Gyroscope (rad/s)</h5>
-        <div>X: <span id="gx">0</span></div>
-        <div>Y: <span id="gy">0</span></div>
-        <div>Z: <span id="gz">0</span></div>
-      </div>
-      <div class="stats-card mt-3 text-start">
-        <strong>Gyroscope Stats</strong><br>
-        Mean: X=<span id="gyroMeanX">0</span>, Y=<span id="gyroMeanY">0</span>, Z=<span id="gyroMeanZ">0</span><br>
-        Min: X=<span id="gyroMinX">0</span>, Y=<span id="gyroMinY">0</span>, Z=<span id="gyroMinZ">0</span><br>
-        Max: X=<span id="gyroMaxX">0</span>, Y=<span id="gyroMaxY">0</span>, Z=<span id="gyroMaxZ">0</span><br>
-        Samples: <span id="gyroSamples">0</span> — Duration: <span id="gyroDuration">0</span> s
-      </div>
+    <div class="prediction-card mt-4">
+      Predicted Activity: <span id="predActivity">–</span><br>
+      <span id="predTime">Last inference: –</span><br>
+      <span id="predLatency">Inference time: –</span>
+      <div class="small-text mt-1" id="loopStatus">Loop: idle</div>
+    </div>
+
+    <div class="plot-container mt-4">
+      <h5>Accelerometer (m/s²)</h5><div id="accPlot"></div>
+    </div>
+    <div class="plot-container">
+      <h5>Gyroscope (rad/s)</h5><div id="gyroPlot"></div>
+    </div>
+
+    <div class="console-card mt-4">
+      <h5>Console Output</h5>
+      <div id="consoleBox">[ready]</div>
     </div>
   </div>
-
-  <div class="plot-container mt-4">
-    <h5 id="accPlotTitle">Accelerometer (m/s²)</h5>
-    <div id="accPlot"></div>
-  </div>
-  <div class="plot-container">
-    <h5 id="gyroPlotTitle">Gyroscope (rad/s)</h5>
-    <div id="gyroPlot"></div>
-  </div>
-</div>
 
 <script>
-  let isRunning = false;
-  const toggleBtn = document.getElementById("toggleButton");
-  const rateInput = document.getElementById("rateSelect");
-  const accSelect = document.getElementById("accSelect");
-  const gyroUnitSelect = document.getElementById("gyroUnit");
+/* ====== CONFIG / STATE ====== */
+const CLASSES=["sit","stand","walk","climb up","climb down","run"];
+let session=null, creatingSession=false;
+let isRunning=false;
+let buffer=[];
+let SAMPLE_RATE=20;
+const WINDOW_SEC=3, STEP_SEC=1;
+let SAMPLES_PER_WINDOW=WINDOW_SEC*SAMPLE_RATE;
+const STEP_INTERVAL=STEP_SEC*1000;
+let startTime=null, debugTimer=null;
+let lastSampleTs=0; // throttle devicemotion
 
-  const accData = {x: [], y: [], z: [], t: [], ts: []};
-  const gyroData = {x: [], y: [], z: [], t: [], ts: []};
-  const maxDuration = 5;
-  let lastUpdate = 0;
-  let maxAccAbs = 1;
-  let maxGyroAbs = 1;
-  let startTime = null;
+/* ====== CONSOLE LOG ====== */
+function log(msg, type="info"){
+  const box=document.getElementById("consoleBox");
+  const time=new Date().toLocaleTimeString();
+  const safe=String(msg).replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const color = type==="err" ? "#f55" : type==="ok" ? "#7f7" : "#0f0";
+  box.innerHTML += `<span style="color:${color}">[${time}] ${safe}</span><br>`;
+  const lines=box.innerHTML.split("<br>"); if(lines.length>400) box.innerHTML=lines.slice(-400).join("<br>");
+  box.scrollTop=box.scrollHeight;
+  (type==="err"?console.error:console.log)(msg);
+}
 
-  const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], {hour12:false});
+/* ====== PLOTS ====== */
+const accData={x:[],y:[],z:[],t:[]}, gyroData={x:[],y:[],z:[],t:[]};
+Plotly.newPlot('accPlot',[
+  {y:[],mode:'lines',name:'X',line:{color:'red'}},
+  {y:[],mode:'lines',name:'Y',line:{color:'green'}},
+  {y:[],mode:'lines',name:'Z',line:{color:'blue'}}
+],{margin:{t:10},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
+Plotly.newPlot('gyroPlot',[
+  {y:[],mode:'lines',name:'X',line:{color:'orange'}},
+  {y:[],mode:'lines',name:'Y',line:{color:'purple'}},
+  {y:[],mode:'lines',name:'Z',line:{color:'teal'}}
+],{margin:{t:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
-  function setupPlots() {
-    const accUnit = "m/s²";
-    const gyroUnit = gyroUnitSelect.value === "rad" ? "rad/s" : "°/s";
+/* ====== MODEL LOAD / RELOAD ====== */
+async function createSession(){
+  if (creatingSession) { log("createSession() already in progress"); return; }
+  creatingSession = true;
+  try{
+    document.getElementById("predActivity").textContent="Loading model...";
+    log("Loading convnet.onnx (WASM, single-thread) ...");
 
-    Plotly.newPlot('accPlot', [
-      {y:[], mode:'lines', name:'X', line:{color:'red'}},
-      {y:[], mode:'lines', name:'Y', line:{color:'green'}},
-      {y:[], mode:'lines', name:'Z', line:{color:'blue'}}
-    ], {
-      margin:{t:10}, 
-      xaxis:{title:'Elapsed Time (s)'},
-      xaxis2:{
-        title:'Timestamp (HH:MM:SS)',
-        overlaying:'x', side:'top',
-        tickmode:'array', tickvals:[], ticktext:[]
-      },
-      yaxis:{title:`Acceleration (${accUnit})`, range:[-maxAccAbs, maxAccAbs]}
-    });
+    // Safe WASM config for sensors
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.simd = true;
+    ort.env.wasm.proxy = false;
+    ort.env.logLevel = "warning"; // change to "verbose" for deep debugging
 
-    Plotly.newPlot('gyroPlot', [
-      {y:[], mode:'lines', name:'X', line:{color:'orange'}},
-      {y:[], mode:'lines', name:'Y', line:{color:'purple'}},
-      {y:[], mode:'lines', name:'Z', line:{color:'teal'}}
-    ], {
-      margin:{t:10}, 
-      xaxis:{title:'Elapsed Time (s)'},
-      xaxis2:{
-        title:'Timestamp (HH:MM:SS)',
-        overlaying:'x', side:'top',
-        tickmode:'array', tickvals:[], ticktext:[]
-      },
-      yaxis:{title:`Rotation (${gyroUnit})`, range:[-maxGyroAbs, maxGyroAbs]}
-    });
+    session = await ort.InferenceSession.create("convnet.onnx", { executionProviders: ["wasm"] });
+    document.getElementById("predActivity").textContent="Model ready ✅";
+    log("Model loaded.", "ok");
+  } catch (e){
+    log("Failed to create session: "+e, "err");
+    session = null;
+  } finally {
+    creatingSession = false;
   }
+}
 
-  setupPlots();
+/* ====== SENSOR / DEBUG FEED ====== */
+function pushSample(ax,ay,az,gx,gy,gz,now){
+  buffer.push([ax,ay,az,gx,gy,gz]);
+  if(buffer.length>SAMPLES_PER_WINDOW) buffer.shift();
 
-  function updateTitles() {
-    const accUnit = "m/s²";
-    const gyroUnit = gyroUnitSelect.value === "rad" ? "rad/s" : "°/s";
-    document.getElementById("accTitle").textContent = `Accelerometer (${accUnit})`;
-    document.getElementById("gyroTitle").textContent = `Gyroscope (${gyroUnit})`;
-    document.getElementById("accPlotTitle").textContent = `Accelerometer (${accUnit})`;
-    document.getElementById("gyroPlotTitle").textContent = `Gyroscope (${gyroUnit})`;
-    Plotly.relayout('accPlot', {'yaxis.title': `Acceleration (${accUnit})`});
-    Plotly.relayout('gyroPlot', {'yaxis.title': `Rotation (${gyroUnit})`});
+  // live values
+  document.getElementById("ax").textContent=ax.toFixed(2);
+  document.getElementById("ay").textContent=ay.toFixed(2);
+  document.getElementById("az").textContent=az.toFixed(2);
+  document.getElementById("gx").textContent=gx.toFixed(2);
+  document.getElementById("gy").textContent=gy.toFixed(2);
+  document.getElementById("gz").textContent=gz.toFixed(2);
+
+  // plot buffers (keep last 5s)
+  accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now);
+  gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now);
+  const maxT = now - 5;
+  [accData,gyroData].forEach(d=>{ while(d.t.length && d.t[0] < maxT){ d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift(); }});
+  Plotly.update('accPlot',{x:[accData.t,accData.t,accData.t], y:[accData.x,accData.y,accData.z]}, {xaxis:{range:[Math.max(0, now-5), now]}});
+  Plotly.update('gyroPlot',{x:[gyroData.t,gyroData.t,gyroData.t], y:[gyroData.x,gyroData.y,gyroData.z]}, {xaxis:{range:[Math.max(0, now-5), now]}});
+
+  // stats
+  updateStats(now);
+}
+
+function updateStats(now){
+  const stats=a=>({min:Math.min(...a).toFixed(2), max:Math.max(...a).toFixed(2), mean:(a.reduce((x,y)=>x+y,0)/a.length).toFixed(2)});
+  if(accData.x.length){ const s=stats(accData.x.concat(accData.y,accData.z));
+    document.getElementById("accStats").innerHTML=`Mean:${s.mean}, Min:${s.min}, Max:${s.max}<br>Samples:${accData.t.length}, Time:${now.toFixed(2)} s`; }
+  if(gyroData.x.length){ const s=stats(gyroData.x.concat(gyroData.y,gyroData.z));
+    document.getElementById("gyroStats").innerHTML=`Mean:${s.mean}, Min:${s.min}, Max:${s.max}<br>Samples:${gyroData.t.length}, Time:${now.toFixed(2)} s`; }
+}
+
+// Throttled real sensor handler
+function handleMotion(e){
+  if(!isRunning) return;
+  const targetHz = parseFloat(document.getElementById("rateSelect").value)||20;
+  const interval = 1000/targetHz;
+  const nowTs = performance.now();
+  if (nowTs - lastSampleTs < interval) return; // throttle
+  lastSampleTs = nowTs;
+
+  if(!startTime) startTime = performance.now();
+  const now = (performance.now()-startTime)/1000;
+
+  const accMode=document.getElementById("accType").value;
+  const gyroMode=document.getElementById("gyroUnit").value;
+  const acc= accMode==="gravity" ? e.accelerationIncludingGravity : e.acceleration;
+  const ax=acc?.x??0, ay=acc?.y??0, az=acc?.z??0;
+  let gx=e.rotationRate?.beta??0, gy=e.rotationRate?.gamma??0, gz=e.rotationRate?.alpha??0;
+  if(gyroMode==="rads"){ gx*=Math.PI/180; gy*=Math.PI/180; gz*=Math.PI/180; }
+  pushSample(ax,ay,az,gx,gy,gz,now);
+}
+
+// Debug generator
+function startDebugMode(){
+  SAMPLE_RATE=parseFloat(document.getElementById("rateSelect").value)||20;
+  const dt=1000/SAMPLE_RATE; let t0=performance.now();
+  debugTimer=setInterval(()=>{
+    const now=(performance.now()-t0)/1000;
+    const ax=Math.sin(now*2*Math.PI*1.5)+(Math.random()-0.5)*0.2;
+    const ay=Math.cos(now*2*Math.PI*1.5)+(Math.random()-0.5)*0.2;
+    const az=9.81+(Math.random()-0.5)*0.1;
+    const gx=Math.sin(now*2*Math.PI*0.8)*0.05;
+    const gy=Math.cos(now*2*Math.PI*0.8)*0.05;
+    const gz=(Math.random()-0.5)*0.01;
+    pushSample(ax,ay,az,gx,gy,gz,now);
+  }, dt);
+}
+function stopDebugMode(){ if(debugTimer) clearInterval(debugTimer); debugTimer=null; }
+
+/* ====== INFERENCE SAFE RUN + WATCHDOG ====== */
+const INFERENCE_TIMEOUT_MS = 4000; // consider run hung if longer than this
+
+function timeoutPromise(ms){
+  return new Promise((_, rej) => setTimeout(()=>rej(new Error(`watchdog timeout after ${ms}ms`)), ms));
+}
+
+async function safeRun(tensor){
+  // Race session.run vs watchdog timeout
+  return Promise.race([
+    session.run({ input: tensor }),
+    timeoutPromise(INFERENCE_TIMEOUT_MS)
+  ]);
+}
+
+async function performInference(){
+  if(!isRunning) return;
+  if(!session){ log("⚠️ No session; skipping inference."); return; }
+  if(buffer.length < SAMPLES_PER_WINDOW){ return; }
+
+  const arr=buffer.slice(-SAMPLES_PER_WINDOW);
+  const tensor=new ort.Tensor("float32", new Float32Array(arr.flat()), [1,6,60]);
+  const t0=performance.now();
+
+  try{
+    document.getElementById("loopStatus").textContent="Loop: running";
+    log(`🧠 Running inference... (buffer=${buffer.length})`);
+    const out = await safeRun(tensor);  // <-- watchdog-protected run
+    const latency = performance.now()-t0;
+    const data = out[Object.keys(out)[0]].data;
+    const pred = data.indexOf(Math.max(...data));
+    const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById("predActivity").textContent=CLASSES[pred];
+    document.getElementById("predTime").textContent="Last inference: "+ts;
+    document.getElementById("predLatency").textContent="Inference time: "+latency.toFixed(1)+" ms";
+    log(`✅ Pred=${CLASSES[pred]} | latency=${latency.toFixed(1)} ms`, "ok");
+  } catch(err){
+    log(`❌ Inference error: ${err}`, "err");
+    // If we timed out or had a run-level error, try to rebuild the session once
+    await rebuildSessionIfNeeded(err);
+  } finally {
+    document.getElementById("loopStatus").textContent="Loop: idle";
   }
+}
 
-  gyroUnitSelect.addEventListener('change', updateTitles);
-  accSelect.addEventListener('change', updateTitles);
+async function rebuildSessionIfNeeded(err){
+  if(!isRunning) return;
+  // only rebuild on watchdog timeout or known fatal errors
+  const msg = String(err||"");
+  if (msg.includes("watchdog") || msg.includes("abort") || msg.includes("no available backend")) {
+    log("🔁 Recreating session due to watchdog/fatal error...");
+    await createSession();
+  }
+}
 
-  function handleMotion(e){
-    const now = performance.now() / 1000;
-    const rate = Math.min(Math.max(parseFloat(rateInput.value) || 50, 1), 100);
-    if(now - lastUpdate < 1 / rate) return;
-    if(!startTime) startTime = now;
-    lastUpdate = now;
+/* ====== SEQUENTIAL LOOP (NO setInterval) ====== */
+let loopRunning=false;
+async function startInferenceLoop(){
+  if(loopRunning){ log("Loop already running"); return; }
+  loopRunning = true;
+  log(`⚙️ Starting sequential inference loop every ${STEP_INTERVAL/1000}s`);
 
-    const useGravity = accSelect.value === "gravity";
-    const accel = useGravity ? e.accelerationIncludingGravity : e.acceleration;
-    const rotation = e.rotationRate;
-
-    let ax = accel?.x ?? 0, ay = accel?.y ?? 0, az = accel?.z ?? 0;
-    let gx = rotation?.beta ?? 0, gy = rotation?.gamma ?? 0, gz = rotation?.alpha ?? 0;
-
-    if (gyroUnitSelect.value === "rad") {
-      gx *= Math.PI / 180; gy *= Math.PI / 180; gz *= Math.PI / 180;
-    }
-
-    document.getElementById('ax').textContent = ax.toFixed(2);
-    document.getElementById('ay').textContent = ay.toFixed(2);
-    document.getElementById('az').textContent = az.toFixed(2);
-    document.getElementById('gx').textContent = gx.toFixed(2);
-    document.getElementById('gy').textContent = gy.toFixed(2);
-    document.getElementById('gz').textContent = gz.toFixed(2);
-
-    const realTs = Date.now() / 1000;
-    accData.x.push(ax); accData.y.push(ay); accData.z.push(az); accData.t.push(now); accData.ts.push(realTs);
-    gyroData.x.push(gx); gyroData.y.push(gy); gyroData.z.push(gz); gyroData.t.push(now); gyroData.ts.push(realTs);
-
-    const cutoff = now - maxDuration;
-    for (let d of [accData, gyroData]) {
-      while (d.t.length && d.t[0] < cutoff) {
-        d.t.shift(); d.x.shift(); d.y.shift(); d.z.shift(); d.ts.shift();
+  (async function loop(){
+    while(isRunning){
+      if(!session && !creatingSession){
+        log("⚠️ Session missing; attempting to recreate...");
+        await createSession();
       }
+      await performInference(); // never overlaps
+      // If stopped mid-await, break early
+      if(!isRunning) break;
+      await new Promise(r=>setTimeout(r, STEP_INTERVAL));
     }
+    loopRunning = false;
+    log("🛑 Inference loop exited.");
+  })();
+}
 
-    const accTicks = accData.t.filter((_,i)=>i%10===0);
-    const accLabels = accData.ts.filter((_,i)=>i%10===0).map(fmtTime);
-    const gyroTicks = gyroData.t.filter((_,i)=>i%10===0);
-    const gyroLabels = gyroData.ts.filter((_,i)=>i%10===0).map(fmtTime);
+/* ====== UI BUTTONS ====== */
+document.getElementById("toggleButton").onclick = async ()=>{
+  if(!session) await createSession();
 
-    Plotly.update('accPlot', {x:[accData.t, accData.t, accData.t], y:[accData.x, accData.y, accData.z]}, {}, [0,1,2]);
-    Plotly.relayout('accPlot', {'xaxis2.tickvals': accTicks, 'xaxis2.ticktext': accLabels});
-    Plotly.update('gyroPlot', {x:[gyroData.t, gyroData.t, gyroData.t], y:[gyroData.x, gyroData.y, gyroData.z]}, {}, [0,1,2]);
-    Plotly.relayout('gyroPlot', {'xaxis2.tickvals': gyroTicks, 'xaxis2.ticktext': gyroLabels});
-
-    updateStats();
-  }
-
-  function mean(arr) { return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
-
-  function updateStats() {
-    const update = (prefix, data, start) => {
-      document.getElementById(`${prefix}MeanX`).textContent = mean(data.x).toFixed(2);
-      document.getElementById(`${prefix}MeanY`).textContent = mean(data.y).toFixed(2);
-      document.getElementById(`${prefix}MeanZ`).textContent = mean(data.z).toFixed(2);
-      document.getElementById(`${prefix}MinX`).textContent = Math.min(...data.x).toFixed(2);
-      document.getElementById(`${prefix}MinY`).textContent = Math.min(...data.y).toFixed(2);
-      document.getElementById(`${prefix}MinZ`).textContent = Math.min(...data.z).toFixed(2);
-      document.getElementById(`${prefix}MaxX`).textContent = Math.max(...data.x).toFixed(2);
-      document.getElementById(`${prefix}MaxY`).textContent = Math.max(...data.y).toFixed(2);
-      document.getElementById(`${prefix}MaxZ`).textContent = Math.max(...data.z).toFixed(2);
-      document.getElementById(`${prefix}Samples`).textContent = data.x.length;
-      document.getElementById(`${prefix}Duration`).textContent = (performance.now()/1000 - start).toFixed(1);
-    };
-    if(startTime) {
-      update("acc", accData, startTime);
-      update("gyro", gyroData, startTime);
-    }
-  }
-
-  setInterval(() => {
-    const newAccMax = Math.max(maxAccAbs, ...accData.x.map(Math.abs), ...accData.y.map(Math.abs), ...accData.z.map(Math.abs));
-    const newGyroMax = Math.max(maxGyroAbs, ...gyroData.x.map(Math.abs), ...gyroData.y.map(Math.abs), ...gyroData.z.map(Math.abs));
-    if (newAccMax > maxAccAbs) {
-      maxAccAbs = newAccMax;
-      Plotly.relayout('accPlot', {'yaxis.range': [-maxAccAbs, maxAccAbs]});
-    }
-    if (newGyroMax > maxGyroAbs) {
-      maxGyroAbs = newGyroMax;
-      Plotly.relayout('gyroPlot', {'yaxis.range': [-maxGyroAbs, maxGyroAbs]});
-    }
-  }, 5000);
-
-  toggleBtn.onclick = async () => {
-    if(isRunning){
-      window.removeEventListener('devicemotion', handleMotion);
-      toggleBtn.textContent = 'Start';
-      toggleBtn.classList.replace('btn-danger','btn-success');
-      isRunning = false;
+  if(isRunning){
+    isRunning=false;
+    window.removeEventListener("devicemotion", handleMotion);
+    stopDebugMode();
+    document.getElementById("toggleButton").textContent="Start";
+    document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
+    log("Stopped.");
+  } else {
+    isRunning=true;
+    startTime=null; lastSampleTs=0; buffer.length=0;
+    const debug=document.getElementById("debugMode").checked;
+    if(debug){
+      startDebugMode(); log("Debug mode active.");
     } else {
-      if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function'){
-        try{ await DeviceMotionEvent.requestPermission(); }catch(e){ alert('Permission denied'); return; }
+      // iOS permission gate
+      if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
+        try{ await DeviceMotionEvent.requestPermission(); } catch(e){ alert("Permission denied"); isRunning=false; return; }
       }
-      startTime = null;
-      window.addEventListener('devicemotion', handleMotion);
-      toggleBtn.textContent = 'Stop';
-      toggleBtn.classList.replace('btn-success','btn-danger');
-      isRunning = true;
+      window.addEventListener("devicemotion", handleMotion); // no passive:true here
+      log("Sensor capture started.");
     }
-  };
+    startInferenceLoop();
+    document.getElementById("toggleButton").textContent="Stop";
+    document.getElementById("toggleButton").classList.replace("btn-success","btn-danger");
+  }
+};
+
+// Manual inference restart (recreate session & restart loop without toggling sensors)
+document.getElementById("restartBtn").onclick = async ()=>{
+  log("🔄 Manual restart requested.");
+  await createSession();
+  if(isRunning && !loopRunning) startInferenceLoop();
+};
+
+/* ====== BOOT ====== */
+createSession(); // pre-load on page open
 </script>
 </body>
 </html>
