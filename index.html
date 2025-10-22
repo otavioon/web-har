@@ -136,42 +136,76 @@ Plotly.newPlot('gyroPlot',[
 ],{margin:{t:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
 /* ====== MODEL DISCOVERY ====== */
-async function discoverModels(){
-  try{
-    // fetch directory listing (works with python -m http.server and many static servers)
-    const dir = window.location.pathname.replace(/[^\/]*$/, ""); // current folder
-    const res = await fetch(dir);
-    const html = await res.text();
-    const matches = [...html.matchAll(/href="([^"]+\.onnx)"/gi)].map(m => decodeURIComponent(m[1]));
-    const localOnly = matches.filter(h => !h.startsWith("http"));
-    const unique = [...new Set(localOnly)];
-    return unique.length ? unique : ["convnet.onnx"];
-  }catch(e){
-    log("Model discovery failed; falling back to convnet.onnx", "err");
-    return ["convnet.onnx"];
+const MODELS_DIR = "models/";
+
+// Normalize a possibly-relative href to a clean path under MODELS_DIR
+function joinModelsPath(href) {
+  // ignore parent dirs and anchors
+  if (!href || href.startsWith("#") || href.startsWith("?")) return null;
+  // absolute links: keep if they already point inside models/
+  try {
+    const u = new URL(href, location.href);
+    // Only allow files that live under MODELS_DIR
+    const modelsUrl = new URL(MODELS_DIR, location.href);
+    if (!u.href.startsWith(modelsUrl.href)) return null;
+    // Return path relative to page origin (e.g., "models/foo.onnx")
+    return u.pathname.replace(/^\//, "");
+  } catch {
+    return null;
   }
 }
 
-async function populateModelDropdown(){
+async function discoverModels() {
+  // 1) Try directory listing (works on python http.server and many static servers)
+  try {
+    const listingUrl = new URL(MODELS_DIR, location.href).toString();
+    const res = await fetch(listingUrl, { cache: "no-cache" });
+    const html = await res.text();
+    // parse all href="...onnx"
+    const rawMatches = [...html.matchAll(/href="([^"]+\.onnx)"/gi)].map(m => m[1]);
+    const normalized = rawMatches
+      .map(h => joinModelsPath(new URL(h, listingUrl).href))
+      .filter(Boolean);
+
+    const unique = [...new Set(normalized)];
+    if (unique.length) return unique;
+  } catch (e) {
+    console.warn("Directory listing parse failed:", e);
+  }
+
+  // 2) Try manifest file (see option 2 below)
+  try {
+    const res = await fetch(`${MODELS_DIR}manifest.json`, { cache: "no-cache" });
+    if (res.ok) {
+      const arr = await res.json(); // expects ["models/foo.onnx", ...] or ["foo.onnx", ...]
+      const normalized = arr.map(p => p.startsWith(MODELS_DIR) ? p : `${MODELS_DIR}${p}`);
+      if (normalized.length) return normalized;
+    }
+  } catch {}
+
+  // 3) Final fallbacks
+  // If you always have a default at models/convnet.onnx, list that
+  return [`${MODELS_DIR}convnet.onnx`];
+}
+
+async function populateModelDropdown() {
   const sel = document.getElementById("modelSelect");
   const models = await discoverModels();
+
   sel.innerHTML = "";
-  models.forEach(m=>{
+  models.forEach(m => {
     const opt = document.createElement("option");
-    opt.value = m; opt.textContent = m;
+    opt.value = m;
+    opt.textContent = m.replace(/^models\//, "");
     if (m === currentModel) opt.selected = true;
     sel.appendChild(opt);
   });
-  if (!models.includes(currentModel)) currentModel = models[0];
-  document.getElementById("modelStatus").textContent = currentModel;
-}
 
-document.getElementById("modelSelect").addEventListener("change", async (e)=>{
-  currentModel = e.target.value;
-  document.getElementById("modelStatus").textContent = currentModel;
-  log(`Model changed to: ${currentModel}`);
-  await createSession(); // rebuild with the new model
-});
+  // if the current model isn't in the list, use the first
+  if (!models.includes(currentModel)) currentModel = models[0];
+
+  document.getElementById("modelStatus").textContent = currentModel.replace(/^models\//, "");
+}
 
 /* ====== MODEL LOAD / RELOAD ====== */
 async function createSession(){
