@@ -20,7 +20,7 @@
     }
     .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:9rem;overflow:hidden;padding:.75rem 1rem;}
     .prediction-card div{white-space:nowrap;}
-    #predHistory{display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
+    #predHistory{cursor:pointer;display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
     #predHistory .slot{width:2.6rem;height:2.6rem;display:flex;align-items:center;justify-content:center;font-size:1.4rem;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
     #predHistory .slot.current{opacity:1;background:rgba(0,123,255,.15);outline:2px solid rgba(0,123,255,.4);}
     #predLabel{font-size:1.4rem;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;}
@@ -92,6 +92,27 @@
       </div>
     </div>
 
+    <!-- Predictions table modal: same rows as the CSV, time relative to recording start -->
+    <div class="modal fade" id="predTableModal" tabindex="-1" aria-labelledby="predTableTitle" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <div>
+              <h5 class="modal-title" id="predTableTitle">📋 Predictions</h5>
+              <div id="predTableInfo" class="small-text"></div>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-0">
+            <table class="table table-sm table-striped mb-0">
+              <thead class="sticky-top bg-white"><tr><th>Time (s)</th><th>Activity</th></tr></thead>
+              <tbody id="predTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="prediction-card">
       <div class="d-flex align-items-center justify-content-between gap-2">
         <div id="predLabel">
@@ -104,7 +125,7 @@
         </div>
       </div>
       <!-- Last HISTORY_LEN predictions, oldest left, current rightmost -->
-      <div id="predHistory"></div>
+      <div id="predHistory" data-bs-toggle="modal" data-bs-target="#predTableModal" title="Show all predictions"></div>
     </div>
 
     <div class="plot-container">
@@ -147,7 +168,7 @@ const INFERENCE_TIMEOUT_MS = 4000;
 let inferenceCount = 0;
 const HISTORY_LEN = 6;
 let predHistory = []; // [{label, emoji, ts}], oldest first
-let predLog = [];     // every prediction of the current session: [{timestamp, activity}]
+let predLog = [];     // every row of the current session: [{time: Date, activity}]
 let sessionStart = null, sessionModel = null; // set on Start, used for the CSV file name
 
 /* ====== CONSOLE LOG ====== */
@@ -445,24 +466,45 @@ function localIso(d){
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(),3)}`;
 }
 
+// Add a row to the session log (CSV + table). activity is a class label, RECORD_START or COOLDOWN.
+const RECORD_START="RECORD START", COOLDOWN="COOLDOWN";
+function logPrediction(activity){
+  predLog.push({time: new Date(), activity});
+  document.getElementById("exportBtn").disabled = false;
+  if(predTableModal.classList.contains("show")) renderPredTable();
+}
+
 function exportPredictions(){
   if(!predLog.length){ log("Nothing to export yet."); return; }
-  const csv = "timestamp,activity\n" + predLog.map(r=>`${r.timestamp},${r.activity}`).join("\n") + "\n";
+  const csv = "timestamp,activity\n" + predLog.map(r=>`${localIso(r.time)},${r.activity}`).join("\n") + "\n";
   const model = sessionModel.replace(/^.*\//, "").replace(/\.onnx$/i, "");
   const name = `${model}_${localIso(sessionStart).slice(0,19).replace(/:/g,"-")}.csv`;
   const url = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
   const a = Object.assign(document.createElement("a"), {href:url, download:name});
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-  log(`📥 Exported ${predLog.length} predictions to ${name}`, "ok");
+  log(`📥 Exported ${predLog.length} rows to ${name}`, "ok");
 }
 document.getElementById("exportBtn").addEventListener("click", exportPredictions);
+
+// Same rows as the CSV, but time is relative to the recording start (s.mmm)
+const predTableModal = document.getElementById("predTableModal");
+function renderPredTable(){
+  document.getElementById("predTableInfo").textContent = sessionStart
+    ? `Recording started: ${localIso(sessionStart)} · Model: ${sessionModel.replace(/^.*\//, "")}`
+    : "No recording yet.";
+  document.getElementById("predTableBody").innerHTML = predLog.map(r=>{
+    const cls = r.activity===COOLDOWN ? "text-muted" : r.activity===RECORD_START ? "fw-bold" : "";
+    return `<tr class="${cls}"><td>${((r.time - sessionStart)/1000).toFixed(3)}</td><td>${CLASS_EMOJI[r.activity]||""} ${r.activity}</td></tr>`;
+  }).join("");
+}
+predTableModal.addEventListener("show.bs.modal", renderPredTable);
 
 async function performInference(){
   if(!isRunning) return;
   if(!session){ log("⚠️ No session; skipping inference."); return; }
   const effectiveSamples = samplesPerWindow();
-  if(buffer.length < effectiveSamples){ return; }
+  if(buffer.length < effectiveSamples){ logPrediction(COOLDOWN); return; } // window still filling
 
   const arr=buffer.slice(-effectiveSamples);
   // buffer is time-major [T][6]; model expects (B, C, T) = [1, 6, T], so lay out channel-major: data[c*T + t]
@@ -487,8 +529,7 @@ async function performInference(){
     document.getElementById("predTime").textContent = ts;
     document.getElementById("predLatency").textContent = latency.toFixed(1) + " ms";
     pushHistory(label, emoji, ts);
-    predLog.push({timestamp: localIso(new Date()), activity: label});
-    document.getElementById("exportBtn").disabled = false;
+    logPrediction(label);
     log(`✅ [#${inferenceCount}] Pred=${label} | latency=${latency.toFixed(1)} ms (buffer=${buffer.length})`, "ok");
   } catch(err){
     log(`❌ [#${inferenceCount}] Inference error: ${err}`, "err");
@@ -553,7 +594,7 @@ function stopRun(){
 // 🧹 Like reloading the page, but keeps the options and the loaded model
 document.getElementById("clearBtn").addEventListener("click", ()=>{
   if(starting) return;
-  if(predLog.length && !confirm(`Discard ${predLog.length} predictions that may not have been exported?`)) return;
+  if(predLog.length && !confirm(`Discard ${predLog.length} logged rows that may not have been exported?`)) return;
   if(isRunning) stopRun();
   resetRun();
   sessionStart = null; sessionModel = null;
@@ -609,6 +650,7 @@ document.getElementById("toggleButton").onclick = async ()=>{
     document.getElementById("toggleButton").disabled=false;
 
     sessionStart = new Date(); sessionModel = currentModel;
+    logPrediction(RECORD_START);
     isRunning=true;
     if(debug){
       startDebugMode(); log("Debug mode active.");
