@@ -18,14 +18,15 @@
     .prediction-card,.console-card {
       background:#fff;border-radius:.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:1rem;text-align:center;
     }
-    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:9rem;overflow:hidden;padding:.75rem 1rem;}
+    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:10rem;overflow:hidden;padding:.75rem 1rem;cursor:pointer;}
     .prediction-card div{white-space:nowrap;}
-    #predHistory{cursor:pointer;display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
-    #predHistory .slot{width:2.6rem;height:2.6rem;display:flex;align-items:center;justify-content:center;font-size:1.4rem;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
+    #predHistory{display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
+    #predHistory .slot{width:2.6rem;height:3.3rem;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:1.4rem;line-height:1.1;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
+    #predHistory .slot small{font-size:.65rem;font-weight:400;color:#555;}
     #predHistory .slot.current{opacity:1;background:rgba(0,123,255,.15);outline:2px solid rgba(0,123,255,.4);}
     #predLabel{font-size:1.4rem;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;}
     #predEmoji{font-size:2rem;vertical-align:middle;}
-    .plot-container{background:white;border-radius:.75rem;padding:1rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:1rem;}
+    .plot-container{background:white;border-radius:.75rem;padding:.6rem .75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:.75rem;}
     .small-text{font-size:.9rem;color:#555;}
     #consoleBox{
       background:#111;color:#0f0;font-family:monospace;font-size:.9rem;
@@ -113,7 +114,7 @@
       </div>
     </div>
 
-    <div class="prediction-card">
+    <div class="prediction-card" data-bs-toggle="modal" data-bs-target="#predTableModal" title="Show all predictions">
       <div class="d-flex align-items-center justify-content-between gap-2">
         <div id="predLabel">
           <span id="predEmoji">–</span>
@@ -125,7 +126,7 @@
         </div>
       </div>
       <!-- Last HISTORY_LEN predictions, oldest left, current rightmost -->
-      <div id="predHistory" data-bs-toggle="modal" data-bs-target="#predTableModal" title="Show all predictions"></div>
+      <div id="predHistory"></div>
     </div>
 
     <div class="plot-container">
@@ -188,9 +189,9 @@ const accData={x:[],y:[],z:[],t:[]}, gyroData={x:[],y:[],z:[],t:[]};
 // Same axis colors for both plots (defined once in CSS :root)
 const rootStyle = getComputedStyle(document.documentElement);
 const axisTraces = ["x","y","z"].map(a=>({y:[],mode:'lines',name:a.toUpperCase(),line:{color:rootStyle.getPropertyValue(`--axis-${a}`).trim()}}));
-const PLOT_HEIGHT = 260;
-Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
-Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
+const PLOT_HEIGHT = 200;
+Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:5,b:35,l:50,r:10},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
+Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:5,b:35,l:50,r:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
 /* ====== OPTIONS (modal) ====== */
 const DEFAULT_CONFIG = Object.freeze({ rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0 });
@@ -392,11 +393,8 @@ function pushSample(ax,ay,az,gx,gy,gz,now){
 }
 
 function updateStats(now){
-  const stats=a=>({min:Math.min(...a).toFixed(2), max:Math.max(...a).toFixed(2), mean:(a.reduce((x,y)=>x+y,0)/a.length).toFixed(2)});
-  if(accData.x.length){ const s=stats(accData.x.concat(accData.y,accData.z));
-    document.getElementById("accStats").innerHTML=`Mean:${s.mean} Min:${s.min} Max:${s.max}<br>Samples:${accData.t.length} · Time:${now.toFixed(2)} s`; }
-  if(gyroData.x.length){ const s=stats(gyroData.x.concat(gyroData.y,gyroData.z));
-    document.getElementById("gyroStats").innerHTML=`Mean:${s.mean} Min:${s.min} Max:${s.max}<br>Samples:${gyroData.t.length} · Time:${now.toFixed(2)} s`; }
+  document.getElementById("accStats").textContent=`Samples:${accData.t.length} · Time:${now.toFixed(2)} s`;
+  document.getElementById("gyroStats").textContent=`Samples:${gyroData.t.length} · Time:${now.toFixed(2)} s`;
 }
 
 // Throttled real sensor handler
@@ -450,11 +448,12 @@ async function safeRun(tensor){
 function renderHistory(){
   const pad = Array(HISTORY_LEN - predHistory.length).fill(null);
   document.getElementById("predHistory").innerHTML = pad.concat(predHistory).map((p,i)=>
-    `<div class="slot${p && i===HISTORY_LEN-1 ? " current" : ""}" title="${p ? `${p.label} @ ${p.ts}` : ""}">${p ? p.emoji : ""}</div>`
+    `<div class="slot${p && i===HISTORY_LEN-1 ? " current" : ""}" title="${p ? `${p.label} @ ${p.ts}` : ""}">${p ? `${p.emoji}<small>${p.rel}s</small>` : ""}</div>`
   ).join("");
 }
 function pushHistory(label, emoji, ts){
-  predHistory.push({label, emoji, ts});
+  const rel = Math.round((Date.now() - sessionStart) / 1000); // seconds since recording start
+  predHistory.push({label, emoji, ts, rel});
   if(predHistory.length > HISTORY_LEN) predHistory.shift();
   renderHistory();
 }
@@ -466,8 +465,8 @@ function localIso(d){
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(),3)}`;
 }
 
-// Add a row to the session log (CSV + table). activity is a class label, RECORD_START or COOLDOWN.
-const RECORD_START="RECORD START", COOLDOWN="COOLDOWN";
+// Add a row to the session log (CSV + table). activity is a class label, RECORD_START, RECORD_STOP or COOLDOWN.
+const RECORD_START="RECORD START", RECORD_STOP="RECORD STOP", COOLDOWN="COOLDOWN";
 function logPrediction(activity){
   predLog.push({time: new Date(), activity});
   document.getElementById("exportBtn").disabled = false;
@@ -494,7 +493,7 @@ function renderPredTable(){
     ? `Recording started: ${localIso(sessionStart)} · Model: ${sessionModel.replace(/^.*\//, "")}`
     : "No recording yet.";
   document.getElementById("predTableBody").innerHTML = predLog.map(r=>{
-    const cls = r.activity===COOLDOWN ? "text-muted" : r.activity===RECORD_START ? "fw-bold" : "";
+    const cls = r.activity===COOLDOWN ? "text-muted" : (r.activity===RECORD_START || r.activity===RECORD_STOP) ? "fw-bold" : "";
     return `<tr class="${cls}"><td>${((r.time - sessionStart)/1000).toFixed(3)}</td><td>${CLASS_EMOJI[r.activity]||""} ${r.activity}</td></tr>`;
   }).join("");
 }
@@ -517,6 +516,7 @@ async function performInference(){
     inferenceCount += 1;
 //    log(`🧠 [#${inferenceCount}] Running inference... (buffer=${buffer.length})`);
     const out = await safeRun(tensor);
+    if(!isRunning) return; // stopped while inferring: don't log a row after RECORD STOP
     const latency = performance.now()-t0;
     const logits = out[Object.keys(out)[0]].data;
     const pred = logits.indexOf(Math.max(...logits));
@@ -588,6 +588,7 @@ function stopRun(){
   stopDebugMode();
   document.getElementById("toggleButton").textContent="Start";
   document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
+  if(sessionStart) logPrediction(RECORD_STOP);
   log("Stopped.");
 }
 
