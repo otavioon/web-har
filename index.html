@@ -52,6 +52,7 @@
         <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
       </select>
       <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#optionsModal" title="Options">⚙️</button>
+      <button id="exportBtn" class="btn btn-outline-secondary" title="Export predictions (CSV)" disabled>📥</button>
     </div>
 
     <!-- Options modal: values are only committed to `config` on Apply -->
@@ -140,6 +141,8 @@ const INFERENCE_TIMEOUT_MS = 4000;
 let inferenceCount = 0;
 const HISTORY_LEN = 6;
 let predHistory = []; // [{label, emoji, ts}], oldest first
+let predLog = [];     // every prediction of the current session: [{timestamp, activity}]
+let sessionStart = null, sessionModel = null; // set on Start, used for the CSV file name
 
 /* ====== CONSOLE LOG ====== */
 function log(msg, type="info"){
@@ -424,6 +427,26 @@ function pushHistory(label, emoji, ts){
   renderHistory();
 }
 
+/* ====== PREDICTION LOG / CSV EXPORT ====== */
+// Local time as YYYY-MM-DDTHH:MM:SS.mmm (no timezone suffix)
+function localIso(d){
+  const p=(n,w=2)=>String(n).padStart(w,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(),3)}`;
+}
+
+function exportPredictions(){
+  if(!predLog.length){ log("Nothing to export yet."); return; }
+  const csv = "timestamp,activity\n" + predLog.map(r=>`${r.timestamp},${r.activity}`).join("\n") + "\n";
+  const model = sessionModel.replace(/^.*\//, "").replace(/\.onnx$/i, "");
+  const name = `${model}_${localIso(sessionStart).slice(0,19).replace(/:/g,"-")}.csv`;
+  const url = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+  const a = Object.assign(document.createElement("a"), {href:url, download:name});
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  log(`📥 Exported ${predLog.length} predictions to ${name}`, "ok");
+}
+document.getElementById("exportBtn").addEventListener("click", exportPredictions);
+
 async function performInference(){
   if(!isRunning) return;
   if(!session){ log("⚠️ No session; skipping inference."); return; }
@@ -453,6 +476,8 @@ async function performInference(){
     document.getElementById("predTime").textContent = ts;
     document.getElementById("predLatency").textContent = latency.toFixed(1) + " ms";
     pushHistory(label, emoji, ts);
+    predLog.push({timestamp: localIso(new Date()), activity: label});
+    document.getElementById("exportBtn").disabled = false;
     log(`✅ [#${inferenceCount}] Pred=${label} | latency=${latency.toFixed(1)} ms (buffer=${buffer.length})`, "ok");
   } catch(err){
     log(`❌ [#${inferenceCount}] Inference error: ${err}`, "err");
@@ -502,6 +527,7 @@ function resetRun(){
   ["accStats","gyroStats"].forEach(id=>document.getElementById(id).innerHTML="");
   ["predEmoji","predActivity","predTime","predLatency"].forEach(id=>document.getElementById(id).textContent="–");
   predHistory = []; renderHistory();
+  predLog = []; document.getElementById("exportBtn").disabled = true;
 }
 
 let starting=false; // guards against double clicks while Start is still loading the model
@@ -531,6 +557,7 @@ document.getElementById("toggleButton").onclick = async ()=>{
     starting=false;
     document.getElementById("toggleButton").disabled=false;
 
+    sessionStart = new Date(); sessionModel = currentModel;
     isRunning=true;
     if(debug){
       startDebugMode(); log("Debug mode active.");
