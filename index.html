@@ -20,14 +20,15 @@
     .prediction-card,.console-card {
       background:#fff;border-radius:.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:1rem;text-align:center;
     }
-    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:10rem;overflow:hidden;padding:.75rem 1rem;cursor:pointer;}
+    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:9.25rem;overflow:hidden;padding:.5rem .85rem .3rem;cursor:pointer;}
+    #predModel{font-size:.65rem;font-weight:400;color:#6c8db5;margin-top:.3rem;overflow:hidden;text-overflow:ellipsis;}
     .prediction-card div{white-space:nowrap;}
-    #predHistory{display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
-    #predHistory .slot{width:2.6rem;height:3.3rem;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:1.4rem;line-height:1.1;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
+    #predHistory{display:flex;justify-content:center;gap:.35rem;margin-top:.35rem;padding-top:.35rem;border-top:1px solid rgba(0,123,255,.15);}
+    #predHistory .slot{width:2.4rem;height:2.9rem;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:1.25rem;line-height:1.1;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
     #predHistory .slot small{font-size:.65rem;font-weight:400;color:#555;}
     #predHistory .slot.current{opacity:1;background:rgba(0,123,255,.15);outline:2px solid rgba(0,123,255,.4);}
-    #predLabel{font-size:1.4rem;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;}
-    #predEmoji{font-size:2rem;vertical-align:middle;}
+    #predLabel{font-size:1.25rem;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+    #predEmoji{font-size:1.75rem;vertical-align:middle;}
     .plot-container{background:white;border-radius:.75rem;padding:.6rem .75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:.75rem;}
     .small-text{font-size:.9rem;color:#555;}
     #consoleBox{
@@ -39,7 +40,7 @@
     .axis-x,.axis-y,.axis-z{color:#333;border-radius:.35rem;padding:0 .35rem;}
     .axis-x{background:var(--axis-x);} .axis-y{background:var(--axis-y);} .axis-z{background:var(--axis-z);}
     .plot-container h5{margin-bottom:.25rem;}
-    .raw-row{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.25rem 1rem;border-top:1px solid #eee;padding-top:.5rem;}
+    .raw-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .6rem;border-top:1px solid #eee;padding-top:.5rem;}
     #modelSelect.model-ok{background-color:rgba(25,135,84,.18);border-color:rgba(25,135,84,.5);}
     #modelSelect.model-error{background-color:rgba(220,53,69,.18);border-color:rgba(220,53,69,.5);}
   </style>
@@ -47,13 +48,10 @@
 
 <body>
   <div class="container">
-    <h1>📱 WebHAR – Real-Time HAR Dashboard</h1>
+    <h1>📱 WebHAR Dashboard</h1>
 
     <div class="d-flex flex-nowrap align-items-center gap-2 mb-3">
       <button id="toggleButton" class="btn btn-success" style="min-width:5rem">Start</button>
-      <select id="modelSelect" class="form-select w-auto" style="min-width:0" title="not loaded">
-        <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
-      </select>
       <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#optionsModal" title="Options">⚙️</button>
       <div class="dropdown">
         <button id="exportBtn" class="btn btn-outline-secondary" data-bs-toggle="dropdown" aria-expanded="false" title="Export">📥</button>
@@ -66,6 +64,7 @@
         </ul>
       </div>
       <button id="clearBtn" class="btn btn-outline-secondary" title="Clear everything (keeps options)">🧹</button>
+      <button id="wakeBtn" class="btn btn-outline-secondary" title="Keep screen on">🔆</button>
     </div>
 
     <!-- Options modal: values are only committed to `config` on Apply -->
@@ -77,6 +76,13 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body d-grid gap-3">
+            <!-- Loads as soon as it's picked (green = loaded, red = failed); not undone by Cancel -->
+            <div class="input-group">
+              <span class="input-group-text">Model</span>
+              <select id="modelSelect" class="form-select" title="not loaded">
+                <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
+              </select>
+            </div>
             <div class="input-group">
               <span class="input-group-text">Rate (Hz)</span>
               <input id="rateSelect" type="number" min="1" max="100" value="20" class="form-control" />
@@ -144,20 +150,21 @@
       </div>
       <!-- Last HISTORY_LEN predictions, oldest left, current rightmost -->
       <div id="predHistory"></div>
+      <div id="predModel"></div>
     </div>
 
     <div class="plot-container">
       <h5>Accelerometer (<span id="accUnit">m/s²</span>)</h5><div id="accPlot"></div>
       <div class="raw-row small-text">
         <span><span class="axis-x">X: <b id="ax">0</b></span> &nbsp; <span class="axis-y">Y: <b id="ay">0</b></span> &nbsp; <span class="axis-z">Z: <b id="az">0</b></span></span>
-        <span id="accStats" class="text-end"></span>
+        <span id="accStats"></span>
       </div>
     </div>
     <div class="plot-container">
       <h5>Gyroscope (<span id="gyroUnitLabel">rad/s</span>)</h5><div id="gyroPlot"></div>
       <div class="raw-row small-text">
         <span><span class="axis-x">X: <b id="gx">0</b></span> &nbsp; <span class="axis-y">Y: <b id="gy">0</b></span> &nbsp; <span class="axis-z">Z: <b id="gz">0</b></span></span>
-        <span id="gyroStats" class="text-end"></span>
+        <span id="gyroStats"></span>
       </div>
     </div>
 
@@ -187,7 +194,29 @@ let inferenceCount = 0;
 const HISTORY_LEN = 6;
 let predHistory = []; // [{label, emoji, ts}], oldest first
 let predLog = [];     // every row of the current session: [{time: Date, activity}]
-let sensorLog = [];   // raw samples of the current session when "Record sensor data" is on: [{time: Date, values: [ax,ay,az,gx,gy,gz]}]
+// Raw samples of the current session when "Record sensor data" is on. Preallocated typed arrays
+// (time in epoch ms + 6 values per sample) that double when full, so recording doesn't allocate per sample.
+const sensorLog = {
+  length: 0, t: new Float64Array(0), v: new Float64Array(0),
+  reserve(n){
+    if(n <= this.t.length) return;
+    const t = new Float64Array(n), v = new Float64Array(n*6);
+    t.set(this.t.subarray(0, this.length)); v.set(this.v.subarray(0, this.length*6));
+    this.t = t; this.v = v;
+  },
+  push(timeMs, ax,ay,az,gx,gy,gz){
+    if(this.length === this.t.length) this.reserve(Math.max(1024, this.t.length*2));
+    const i = this.length++, o = i*6;
+    this.t[i] = timeMs;
+    this.v[o]=ax; this.v[o+1]=ay; this.v[o+2]=az; this.v[o+3]=gx; this.v[o+4]=gy; this.v[o+5]=gz;
+  },
+  clear(){ this.length = 0; }, // keeps the allocation for the next session
+  csvRows(){
+    const rows = new Array(this.length);
+    for(let i=0;i<this.length;i++) rows[i] = `${localIso(new Date(this.t[i]))},${Array.from(this.v.subarray(i*6, i*6+6)).join(",")}`;
+    return rows;
+  },
+};
 let sessionStart = null, sessionModel = null; // set on Start, used for the CSV file name
 let warnedOutputSize = false, warnedNullSensor = false, sampleCount = 0;
 let sensorWatchdog = null; // warns if no motion events arrive after Start
@@ -228,12 +257,14 @@ Plotly.newPlot('accPlot',structuredClone(axisTraces),plotLayout('m/s²'));
 Plotly.newPlot('gyroPlot',structuredClone(axisTraces),plotLayout('rad/s'));
 
 /* ====== OPTIONS (modal) ====== */
-const DEFAULT_CONFIG = Object.freeze({ rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0, recordSensors:false });
+// model is the file name inside MODELS_DIR (e.g. "cnnpf_loo_ms_erm.onnx"); unlike the others it applies immediately
+const DEFAULT_CONFIG = Object.freeze({ model:"cnnpf_loo_ms_erm.onnx", rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0, recordSensors:true });
 const config = { ...DEFAULT_CONFIG };
 const optionsModal = document.getElementById("optionsModal");
 
 function readOptionsForm(){
   return {
+    model: modelFileName(currentModel),
     rate: Math.min(100, Math.max(1, parseFloat(document.getElementById("rateSelect").value)||20)),
     gyroUnit: document.getElementById("gyroUnit").value,
     accType: document.getElementById("accType").value,
@@ -242,7 +273,13 @@ function readOptionsForm(){
     recordSensors: document.getElementById("recordSensors").checked,
   };
 }
-function fillOptionsForm(cfg=config){
+function fillOptionsForm(cfg=config, {reloadModel=false}={}){
+  // The model loads right away when it differs from the current one (or always, with reloadModel)
+  const modelPath = `${MODELS_DIR}${cfg.model.replace(/^models\//, "")}`;
+  if(modelPath !== currentModel || reloadModel){
+    if([...document.getElementById("modelSelect").options].some(o=>o.value===modelPath)) selectModel(modelPath);
+    else log(`Model "${cfg.model}" not found in ${MODELS_DIR}; keeping ${modelFileName(currentModel)}`, "warn");
+  }
   document.getElementById("rateSelect").value = cfg.rate;
   document.getElementById("gyroUnit").value = cfg.gyroUnit;
   document.getElementById("accType").value = cfg.accType;
@@ -269,14 +306,15 @@ document.getElementById("loadConfigFile").addEventListener("change", async e=>{
   try{
     const loaded = JSON.parse(await file.text());
     // Keep only known keys whose type matches the default; anything else falls back to the default
-    const cfg = { ...DEFAULT_CONFIG };
+    // (except a missing model, which keeps the current one)
+    const cfg = { ...DEFAULT_CONFIG, model: config.model };
     for(const k of Object.keys(DEFAULT_CONFIG)) if(typeof loaded[k] === typeof DEFAULT_CONFIG[k]) cfg[k] = loaded[k];
-    fillOptionsForm(cfg);
+    fillOptionsForm(cfg, {reloadModel:true});
     // A value that isn't one of a dropdown's options leaves it blank: fall back to the default
     [["gyroUnit","gyroUnit"],["accType","accType"],["countdownSelect","countdown"]].forEach(([id,k])=>{
       const el=document.getElementById(id); if(el.value==="") el.value=DEFAULT_CONFIG[k];
     });
-    log(`📂 Options loaded from ${file.name} (press Apply to use them)`, "ok");
+    log(`📂 Options loaded from ${file.name}: model ${cfg.model} is loading now; press Apply to use the other options`, "ok");
   } catch(err){
     log(`Failed to load ${file.name}: ${err}`, "err");
     alert(`Invalid config file: ${err.message}`);
@@ -375,22 +413,31 @@ async function populateModelDropdown() {
 
   // if the current model isn't in the list, use the first
   if (!models.includes(currentModel)) currentModel = models[0];
+  sel.value = currentModel;
+  config.model = modelFileName(currentModel);
 }
 
-// Tint the model dropdown by load state: "", "loading", "ok" or "error"
+const modelFileName = path => path.replace(/^.*\//, "");
+
+// Tint the model dropdown by load state ("", "loading", "ok" or "error") and show the name on the prediction card
 function setModelStatus(state, title){
   const el = document.getElementById("modelSelect");
   el.classList.remove("model-ok","model-error");
   if(state==="ok") el.classList.add("model-ok");
   if(state==="error") el.classList.add("model-error");
   el.title = title || state || "not loaded";
+  document.getElementById("predModel").textContent = `${modelFileName(currentModel)}${state==="error" ? " (load failed)" : state==="loading" ? " (loading...)" : ""}`;
 }
 
-document.getElementById("modelSelect").addEventListener("change", async (e)=>{
-  currentModel = e.target.value;
+// Switch model and load it now (fresh bytes, no cache)
+async function selectModel(path){
+  currentModel = path;
+  config.model = modelFileName(path);
+  document.getElementById("modelSelect").value = path;
   log(`Model changed to: ${currentModel}`);
-  await createSession(); // now loads fresh bytes (no cache)
-});
+  await createSession();
+}
+document.getElementById("modelSelect").addEventListener("change", e=>selectModel(e.target.value));
 
 
 /* ====== MODEL LOAD / RELOAD ====== */
@@ -442,7 +489,7 @@ async function createSession(){
 function pushSample(ax,ay,az,gx,gy,gz,now){
   sampleCount++;
   buffer.push([ax,ay,az,gx,gy,gz]);
-  if(config.recordSensors) sensorLog.push({time: new Date(), values: [ax,ay,az,gx,gy,gz]});
+  if(config.recordSensors) sensorLog.push(Date.now(), ax,ay,az,gx,gy,gz);
   while(buffer.length>samplesPerWindow()) buffer.shift();
 
   // live values
@@ -466,8 +513,8 @@ function pushSample(ax,ay,az,gx,gy,gz,now){
 }
 
 function updateStats(now){
-  document.getElementById("accStats").textContent=`Samples:${accData.t.length} · Time:${now.toFixed(2)} s`;
-  document.getElementById("gyroStats").textContent=`Samples:${gyroData.t.length} · Time:${now.toFixed(2)} s`;
+  document.getElementById("accStats").textContent=`⏱ ${now.toFixed(2)} s`;
+  document.getElementById("gyroStats").textContent=`⏱ ${now.toFixed(2)} s`;
 }
 
 // Throttled real sensor handler
@@ -568,7 +615,7 @@ function exportBaseName(){
 
 const predictionsCsv = () => "timestamp,activity\n" + predLog.map(r=>`${localIso(r.time)},${r.activity}`).join("\n") + "\n";
 const sensorsCsv = () => "TimeStamp,accel-x,accel-y,accel-z,gyro-x,gyro-y,gyro-z\n"
-  + sensorLog.map(r=>`${localIso(r.time)},${r.values.join(",")}`).join("\n") + "\n";
+  + sensorLog.csvRows().join("\n") + "\n";
 const consoleText = () => consoleLines.join("\n") + "\n";
 const configJson = () => JSON.stringify(config, null, 2) + "\n"; // the applied config
 
@@ -627,9 +674,10 @@ document.getElementById("exportBtn").addEventListener("show.bs.dropdown", ()=>{
 // Same rows as the CSV, but time is relative to the recording start (s.mmm)
 const predTableModal = document.getElementById("predTableModal");
 function renderPredTable(){
-  document.getElementById("predTableInfo").textContent = sessionStart
-    ? `Recording started: ${localIso(sessionStart)} · Model: ${sessionModel.replace(/^.*\//, "")}`
-    : "No recording yet.";
+  const info = document.getElementById("predTableInfo");
+  info.replaceChildren(...(sessionStart
+    ? [`Recording started: ${localIso(sessionStart)}`, `Model: ${modelFileName(sessionModel)}`]
+    : ["No recording yet."]).map(text=>Object.assign(document.createElement("div"), {textContent:text})));
   document.getElementById("predTableBody").innerHTML = predLog.map(r=>{
     const cls = r.activity===COOLDOWN ? "text-muted" : (r.activity===RECORD_START || r.activity===RECORD_STOP) ? "fw-bold" : "";
     return `<tr class="${cls}"><td>${((r.time - sessionStart)/1000).toFixed(3)}</td><td>${CLASS_EMOJI[r.activity]||""} ${r.activity}</td></tr>`;
@@ -721,7 +769,7 @@ function resetRun(){
   ["accStats","gyroStats"].forEach(id=>document.getElementById(id).innerHTML="");
   ["predEmoji","predActivity","predTime","predLatency"].forEach(id=>document.getElementById(id).textContent="–");
   predHistory = []; renderHistory();
-  predLog = []; sensorLog = [];
+  predLog = []; sensorLog.clear();
 }
 
 function stopRun(){
@@ -739,6 +787,41 @@ function stopRun(){
     log(`Session summary: ${secs.toFixed(1)} s, ${sampleCount} samples (avg ${(sampleCount/secs).toFixed(1)} Hz, target ${config.rate} Hz), ${preds} predictions${config.recordSensors ? `, ${sensorLog.length} sensor samples recorded` : ""}`);
   }
 }
+
+/* ====== KEEP SCREEN ON (Screen Wake Lock API) ====== */
+// The browser drops the lock whenever the page is hidden, so it's re-requested when the page is visible again.
+let wakeLock = null, wakeWanted = false;
+const wakeBtn = document.getElementById("wakeBtn");
+
+function setWakeButton(on){
+  wakeBtn.classList.toggle("btn-warning", on);
+  wakeBtn.classList.toggle("btn-outline-secondary", !on);
+  wakeBtn.title = on ? "Screen kept on (click to allow sleep)" : "Keep screen on";
+}
+
+async function acquireWakeLock(){
+  try{
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", ()=>{ wakeLock = null; if(!wakeWanted) setWakeButton(false); });
+    setWakeButton(true);
+  } catch(err){
+    wakeWanted = false; setWakeButton(false);
+    log(`Could not keep screen on: ${err.message}`, "err");
+  }
+}
+
+if(!("wakeLock" in navigator)){
+  wakeBtn.disabled = true;
+  wakeBtn.title = "Keep screen on is not supported by this browser (needs HTTPS)";
+}
+wakeBtn.addEventListener("click", async ()=>{
+  wakeWanted = !wakeWanted;
+  if(wakeWanted){ await acquireWakeLock(); if(wakeLock) log("🔆 Screen will stay on", "ok"); }
+  else { await wakeLock?.release(); setWakeButton(false); log("Screen may sleep again"); }
+});
+document.addEventListener("visibilitychange", ()=>{
+  if(wakeWanted && !document.hidden && !wakeLock) acquireWakeLock();
+});
 
 // Mobile browsers pause sensors/timers when the screen locks or the tab is hidden
 document.addEventListener("visibilitychange", ()=>{
@@ -774,12 +857,12 @@ function unlockBeeps(){
   Object.values(beeps).forEach(a=>{ a.muted=true; a.play().then(()=>{ a.pause(); a.currentTime=0; a.muted=false; }).catch(()=>{ a.muted=false; }); });
 }
 
-// Show N, N-1, ..., 1 in the Start button, one per second: small beep each second, long beep on the last
+// Show N, N-1, ..., 1 in the Start button with a small beep each second; the long beep plays when recording starts
 async function runCountdown(seconds){
   const btn=document.getElementById("toggleButton");
   for(let s=seconds; s>=1; s--){
     btn.textContent=`⏱ ${s}`;
-    playBeep(s===1 ? beeps.long : beeps.small);
+    playBeep(beeps.small);
     await new Promise(r=>setTimeout(r, 1000));
   }
 }
@@ -815,6 +898,9 @@ document.getElementById("toggleButton").onclick = async ()=>{
     if(samplesPerWindow() !== 60)
       log(`Rate ${config.rate} Hz gives ${samplesPerWindow()} samples per ${WINDOW_SEC} s window; the model expects 60 (20 Hz) and will likely fail`, "warn");
 
+    if(config.countdown>0) playBeep(beeps.long); // recording starts now
+    // Room for 10 min at the configured rate up front; grows automatically beyond that
+    if(config.recordSensors) sensorLog.reserve(Math.ceil(config.rate*600));
     sessionStart = new Date(); sessionModel = currentModel;
     sampleCount = 0; warnedOutputSize = false; warnedNullSensor = false;
     logPrediction(RECORD_START);
