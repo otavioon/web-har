@@ -42,10 +42,12 @@
     .axis-x,.axis-y,.axis-z{color:#333;border-radius:.35rem;padding:0 .35rem;}
     .axis-x{background:var(--axis-x);} .axis-y{background:var(--axis-y);} .axis-z{background:var(--axis-z);}
     .plot-container h5{margin-bottom:.25rem;}
-    .raw-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .6rem;border-top:1px solid #eee;padding-top:.5rem;font-variant-numeric:tabular-nums;}
-    /* Fixed widths so the row doesn't shift as values change (e.g. "-10.25" vs "0.12") */
-    .raw-row .time-val{min-width:5.5em;}
-    .raw-row b{display:inline-block;min-width:3.4em;text-align:right;}
+    /* Time + X/Y/Z always on one line; fixed widths so it doesn't shift as values change ("-10.25" vs "0.12") */
+    .raw-row{display:flex;flex-wrap:nowrap;align-items:center;gap:.4rem;border-top:1px solid #eee;padding-top:.5rem;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:.8rem;}
+    .raw-row .time-val{min-width:4.6em;}
+    .raw-row b{display:inline-block;min-width:3em;text-align:right;}
+    .raw-row .axis-x,.raw-row .axis-y,.raw-row .axis-z{padding:0 .25rem;}
+    @media (max-width:576px){ body{padding:.5rem;} .container{padding-left:.5rem;padding-right:.5rem;} }
     #modelSelect.model-ok{background-color:rgba(25,135,84,.18);border-color:rgba(25,135,84,.5);}
     #modelSelect.model-error{background-color:rgba(220,53,69,.18);border-color:rgba(220,53,69,.5);}
   </style>
@@ -828,14 +830,28 @@ let wakeWanted = false;
 const wakeBtn = document.getElementById("wakeBtn");
 
 // Video fallback: Chrome only keeps the screen on for a *visible* playing video that has audio (or is large).
-// NoSleep never attaches its video to the page, so do it here: a 2px fixed element in the corner, its
-// silent audio track unmuted (muted video doesn't count).
+// NoSleep never attaches its video to the page, so do it here: a 2px fixed element in the corner.
+// Chrome needs its silent audio track unmuted (muted video doesn't count); Firefox doesn't, and on Android it
+// pauses "audible" media when other audio (e.g. the countdown beeps) starts, so there it stays muted.
+const isFirefox = /firefox|fxios/i.test(navigator.userAgent);
 if(noSleep?.noSleepVideo){
   const v = noSleep.noSleepVideo;
   Object.assign(v.style, {position:"fixed", right:"0", bottom:"0", width:"2px", height:"2px", opacity:"0.01", pointerEvents:"none"});
-  v.muted = false; v.volume = 0.01;
+  v.muted = isFirefox; v.volume = isFirefox ? 0 : 0.01;
+  if(isFirefox) v.setAttribute("muted", "");
   document.body.appendChild(v);
-  v.addEventListener("pause", ()=>{ if(wakeWanted && !document.hidden) log("Keep-screen-on video was paused by the browser; screen may sleep (tap 🔆 twice to retry)", "warn"); });
+  // If the browser pauses it while keep-on is wanted, resume it (allowed: the page already had a user gesture)
+  let resumes = []; // timestamps of recent auto-resumes, to avoid a pause/resume loop
+  v.addEventListener("pause", ()=>{
+    if(!wakeWanted || document.hidden) return;
+    const now = Date.now();
+    resumes = resumes.filter(t => now - t < 10000);
+    if(resumes.length >= 3){ log("Browser keeps pausing the keep-screen-on video; giving up (serve over HTTPS to use the Wake Lock API)", "err"); return; }
+    resumes.push(now);
+    v.play()
+      .then(()=>log("Keep-screen-on video was paused by the browser; resumed it"))
+      .catch(err=>log(`Keep-screen-on video was paused by the browser and could not resume (${err.message}); screen may sleep — tap 🔆 twice to retry`, "warn"));
+  });
 }
 log(nativeWakeLock ? "Keep screen on: Wake Lock API available"
   : `Keep screen on: no Wake Lock API${window.isSecureContext ? "" : " (page not on HTTPS)"}; will use the video fallback, which is less reliable. Serve over HTTPS or localhost for the native API`, nativeWakeLock ? "info" : "warn");
