@@ -53,7 +53,13 @@
         <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
       </select>
       <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#optionsModal" title="Options">⚙️</button>
-      <button id="exportBtn" class="btn btn-outline-secondary" title="Export predictions (CSV)" disabled>📥</button>
+      <div class="dropdown">
+        <button id="exportBtn" class="btn btn-outline-secondary" data-bs-toggle="dropdown" aria-expanded="false" title="Export (CSV)" disabled>📥</button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><button id="exportPredBtn" class="dropdown-item" type="button">📋 Predictions</button></li>
+          <li><button id="exportSensorBtn" class="dropdown-item" type="button">📈 Sensor data</button></li>
+        </ul>
+      </div>
       <button id="clearBtn" class="btn btn-outline-secondary" title="Clear everything (keeps options)">🧹</button>
     </div>
 
@@ -83,6 +89,12 @@
               <select id="countdownSelect" class="form-select"><option value="0" selected>Disabled</option><option value="3">3 s</option><option value="5">5 s</option><option value="10">10 s</option></select>
             </div>
             <div class="form-check"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug Data</label></div>
+            <div class="form-check"><input class="form-check-input" type="checkbox" id="recordSensors"><label class="form-check-label" for="recordSensors">Record sensor data</label></div>
+            <div class="d-flex gap-2 border-top pt-3">
+              <button type="button" id="saveConfigBtn" class="btn btn-sm btn-outline-secondary" title="Download the values in this form as config.json">💾 Save to file</button>
+              <button type="button" id="loadConfigBtn" class="btn btn-sm btn-outline-secondary" title="Fill this form from a config.json (press Apply to keep it)">📂 Load from file</button>
+              <input type="file" id="loadConfigFile" accept=".json,application/json" hidden />
+            </div>
           </div>
           <div class="modal-footer">
             <button type="button" id="restoreDefaults" class="btn btn-link me-auto px-0" title="Fill the form with default values (press Apply to keep them)">Restore defaults</button>
@@ -170,31 +182,46 @@ let inferenceCount = 0;
 const HISTORY_LEN = 6;
 let predHistory = []; // [{label, emoji, ts}], oldest first
 let predLog = [];     // every row of the current session: [{time: Date, activity}]
+let sensorLog = [];   // raw samples of the current session when "Record sensor data" is on: [{time: Date, values: [ax,ay,az,gx,gy,gz]}]
 let sessionStart = null, sessionModel = null; // set on Start, used for the CSV file name
+let warnedOutputSize = false, warnedNullSensor = false, sampleCount = 0;
+let sensorWatchdog = null; // warns if no motion events arrive after Start
 
 /* ====== CONSOLE LOG ====== */
 function log(msg, type="info"){
   const box=document.getElementById("consoleBox");
   const time=new Date().toLocaleTimeString();
   const safe=String(msg).replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  const color = type==="err" ? "#f55" : type==="ok" ? "#7f7" : "#0f0";
+  const color = type==="err" ? "#f55" : type==="warn" ? "#fd5" : type==="ok" ? "#7f7" : "#0f0";
   box.innerHTML += `<span style="color:${color}">[${time}] ${safe}</span><br>`;
   const lines=box.innerHTML.split("<br>"); if(lines.length>600) box.innerHTML=lines.slice(-600).join("<br>");
   box.scrollTop=box.scrollHeight;
-  (type==="err"?console.error:console.log)(msg);
+  (type==="err"?console.error:type==="warn"?console.warn:console.log)(msg);
 }
+
+// Surface anything uncaught in the on-page console too
+window.addEventListener("error", e=>log(`Uncaught error: ${e.message} (${(e.filename||"").split("/").pop()}:${e.lineno})`, "err"));
+window.addEventListener("unhandledrejection", e=>log(`Unhandled promise rejection: ${e.reason}`, "err"));
+
+// CDN libraries: if one failed to load, say which instead of a cryptic ReferenceError
+[["Plotly","Plotly (graphs)"],["ort","ONNX Runtime (inference)"],["bootstrap","Bootstrap JS (options/export menus)"]]
+  .forEach(([g,name])=>{ if(typeof window[g]==="undefined") log(`${name} failed to load from CDN — check the network connection`, "err"); });
+if(!window.isSecureContext) log("Page is not served over HTTPS/localhost: browsers block motion sensors here (use Debug Data or HTTPS)", "warn");
 
 /* ====== PLOTS ====== */
 const accData={x:[],y:[],z:[],t:[]}, gyroData={x:[],y:[],z:[],t:[]};
 // Same axis colors for both plots (defined once in CSS :root)
 const rootStyle = getComputedStyle(document.documentElement);
 const axisTraces = ["x","y","z"].map(a=>({y:[],mode:'lines',name:a.toUpperCase(),line:{color:rootStyle.getPropertyValue(`--axis-${a}`).trim()}}));
-const PLOT_HEIGHT = 200;
-Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:5,b:35,l:50,r:10},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
-Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:5,b:35,l:50,r:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
+const PLOT_HEIGHT = 220;
+// Horizontal legend centered below the x-axis title
+const plotLayout = yTitle => ({height:PLOT_HEIGHT,margin:{t:5,b:60,l:50,r:10},yaxis:{title:yTitle},xaxis:{title:'Time (s)'},
+  legend:{orientation:'h',x:0.5,xanchor:'center',y:-0.35,yanchor:'top'}});
+Plotly.newPlot('accPlot',structuredClone(axisTraces),plotLayout('m/s²'));
+Plotly.newPlot('gyroPlot',structuredClone(axisTraces),plotLayout('rad/s'));
 
 /* ====== OPTIONS (modal) ====== */
-const DEFAULT_CONFIG = Object.freeze({ rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0 });
+const DEFAULT_CONFIG = Object.freeze({ rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0, recordSensors:false });
 const config = { ...DEFAULT_CONFIG };
 const optionsModal = document.getElementById("optionsModal");
 
@@ -205,6 +232,7 @@ function readOptionsForm(){
     accType: document.getElementById("accType").value,
     debug: document.getElementById("debugMode").checked,
     countdown: parseInt(document.getElementById("countdownSelect").value)||0,
+    recordSensors: document.getElementById("recordSensors").checked,
   };
 }
 function fillOptionsForm(cfg=config){
@@ -213,12 +241,40 @@ function fillOptionsForm(cfg=config){
   document.getElementById("accType").value = cfg.accType;
   document.getElementById("debugMode").checked = cfg.debug;
   document.getElementById("countdownSelect").value = cfg.countdown;
+  document.getElementById("recordSensors").checked = cfg.recordSensors;
 }
 
 // Reset the form to the applied config every time the modal opens (discards cancelled edits)
 optionsModal.addEventListener("show.bs.modal", ()=>fillOptionsForm());
 // Only fills the form; like any other edit it takes effect on Apply
 document.getElementById("restoreDefaults").addEventListener("click", ()=>fillOptionsForm(DEFAULT_CONFIG));
+
+// Save/load the form values as config.json. Loading only fills the form; Apply commits it.
+document.getElementById("saveConfigBtn").addEventListener("click", ()=>{
+  downloadFile("config.json", JSON.stringify(readOptionsForm(), null, 2) + "\n", "application/json");
+  log("💾 Options saved to config.json", "ok");
+});
+document.getElementById("loadConfigBtn").addEventListener("click", ()=>document.getElementById("loadConfigFile").click());
+document.getElementById("loadConfigFile").addEventListener("change", async e=>{
+  const file = e.target.files[0];
+  e.target.value = ""; // allow loading the same file again
+  if(!file) return;
+  try{
+    const loaded = JSON.parse(await file.text());
+    // Keep only known keys whose type matches the default; anything else falls back to the default
+    const cfg = { ...DEFAULT_CONFIG };
+    for(const k of Object.keys(DEFAULT_CONFIG)) if(typeof loaded[k] === typeof DEFAULT_CONFIG[k]) cfg[k] = loaded[k];
+    fillOptionsForm(cfg);
+    // A value that isn't one of a dropdown's options leaves it blank: fall back to the default
+    [["gyroUnit","gyroUnit"],["accType","accType"],["countdownSelect","countdown"]].forEach(([id,k])=>{
+      const el=document.getElementById(id); if(el.value==="") el.value=DEFAULT_CONFIG[k];
+    });
+    log(`📂 Options loaded from ${file.name} (press Apply to use them)`, "ok");
+  } catch(err){
+    log(`Failed to load ${file.name}: ${err}`, "err");
+    alert(`Invalid config file: ${err.message}`);
+  }
+});
 
 document.getElementById("applyOptions").addEventListener("click", ()=>{
   const next = readOptionsForm();
@@ -264,6 +320,7 @@ async function discoverModels() {
   try {
     const listingUrl = new URL(MODELS_DIR, location.href).toString();
     const res = await fetch(listingUrl, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     // parse all href="...onnx"
     const rawMatches = [...html.matchAll(/href="([^"]+\.onnx)"/gi)].map(m => m[1]);
@@ -272,9 +329,10 @@ async function discoverModels() {
       .filter(Boolean);
 
     const unique = [...new Set(normalized)];
-    if (unique.length) return unique;
+    if (unique.length){ log(`Found ${unique.length} model(s) in ${MODELS_DIR} directory listing`); return unique; }
+    log(`No .onnx files in ${MODELS_DIR} directory listing`, "warn");
   } catch (e) {
-    console.warn("Directory listing parse failed:", e);
+    log(`${MODELS_DIR} directory listing unavailable (${e.message}); trying manifest.json`, "warn");
   }
 
   // 2) Try manifest file (see option 2 below)
@@ -283,12 +341,15 @@ async function discoverModels() {
     if (res.ok) {
       const arr = await res.json(); // expects ["models/foo.onnx", ...] or ["foo.onnx", ...]
       const normalized = arr.map(p => p.startsWith(MODELS_DIR) ? p : `${MODELS_DIR}${p}`);
-      if (normalized.length) return normalized;
+      if (normalized.length){ log(`Found ${normalized.length} model(s) in ${MODELS_DIR}manifest.json`); return normalized; }
     }
-  } catch {}
+  } catch (e) {
+    log(`Invalid ${MODELS_DIR}manifest.json: ${e.message}`, "warn");
+  }
 
   // 3) Final fallbacks
   // If you always have a default at models/cnnpf_loo_ms_erm.onnx, list that
+  log(`Model discovery failed; falling back to ${MODELS_DIR}cnnpf_loo_ms_erm.onnx`, "warn");
   return [`${MODELS_DIR}cnnpf_loo_ms_erm.onnx`];
 }
 
@@ -347,6 +408,7 @@ async function createSession(){
     // 💡 Force a fresh fetch (no cache), then create session from bytes
     // Also set session=null to make the loop skip a cycle while we rebuild.
     session = null;
+    const tLoad = performance.now();
     const resp = await fetch(modelPath, { cache: "no-store" });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} loading ${modelPath}`);
     const bytes = new Uint8Array(await resp.arrayBuffer());
@@ -354,7 +416,9 @@ async function createSession(){
     session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
 
     setModelStatus("ok", `loaded ${modelPath}`);
-    log(`Model loaded: ${modelPath}`, "ok");
+    log(`Model loaded: ${modelPath} (${(bytes.length/1024).toFixed(0)} KB, ${(performance.now()-tLoad).toFixed(0)} ms) · inputs=[${session.inputNames}] outputs=[${session.outputNames}]`, "ok");
+    if (!session.inputNames.includes("input"))
+      log(`Model has no input named "input"; feeding its first input "${session.inputNames[0]}" instead`, "warn");
   } catch (e){
     log("Failed to create session: "+e, "err");
     session = null;
@@ -369,7 +433,9 @@ async function createSession(){
 
 /* ====== SENSOR / DEBUG FEED ====== */
 function pushSample(ax,ay,az,gx,gy,gz,now){
+  sampleCount++;
   buffer.push([ax,ay,az,gx,gy,gz]);
+  if(config.recordSensors) sensorLog.push({time: new Date(), values: [ax,ay,az,gx,gy,gz]});
   while(buffer.length>samplesPerWindow()) buffer.shift();
 
   // live values
@@ -414,6 +480,10 @@ function handleMotion(e){
   const accMode=config.accType;
   const gyroMode=config.gyroUnit;
   const acc= accMode==="gravity" ? e.accelerationIncludingGravity : e.acceleration;
+  if(!warnedNullSensor && (acc?.x==null || e.rotationRate?.alpha==null)){
+    warnedNullSensor = true;
+    log(`Device reports no ${acc?.x==null ? `${accMode} acceleration` : "gyroscope"} data; using 0 for missing values${acc?.x==null && accMode==="linear" ? " (try Accel: Incl. Gravity)" : ""}`, "warn");
+  }
   const ax=acc?.x??0, ay=acc?.y??0, az=acc?.z??0;
   let gx=e.rotationRate?.beta??0, gy=e.rotationRate?.gamma??0, gz=e.rotationRate?.alpha??0;
   if(gyroMode==="rads"){ gx*=Math.PI/180; gy*=Math.PI/180; gz*=Math.PI/180; }
@@ -441,7 +511,8 @@ function timeoutPromise(ms){
   return new Promise((_, rej) => setTimeout(()=>rej(new Error(`watchdog timeout after ${ms}ms`)), ms));
 }
 async function safeRun(tensor){
-  return Promise.race([ session.run({ input: tensor }), timeoutPromise(INFERENCE_TIMEOUT_MS) ]);
+  const inputName = session.inputNames.includes("input") ? "input" : session.inputNames[0];
+  return Promise.race([ session.run({ [inputName]: tensor }), timeoutPromise(INFERENCE_TIMEOUT_MS) ]);
 }
 
 // Always render HISTORY_LEN slots (empty ones padded on the left) so the card never changes size
@@ -473,18 +544,46 @@ function logPrediction(activity){
   if(predTableModal.classList.contains("show")) renderPredTable();
 }
 
-function exportPredictions(){
-  if(!predLog.length){ log("Nothing to export yet."); return; }
-  const csv = "timestamp,activity\n" + predLog.map(r=>`${localIso(r.time)},${r.activity}`).join("\n") + "\n";
-  const model = sessionModel.replace(/^.*\//, "").replace(/\.onnx$/i, "");
-  const name = `${model}_${localIso(sessionStart).slice(0,19).replace(/:/g,"-")}.csv`;
-  const url = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+function downloadFile(name, text, type){
+  const url = URL.createObjectURL(new Blob([text], {type}));
   const a = Object.assign(document.createElement("a"), {href:url, download:name});
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+
+// <model>_<session start>, e.g. cnnpf_loo_ms_erm_2026-11-02T14-30-05
+function exportBaseName(){
+  const model = sessionModel.replace(/^.*\//, "").replace(/\.onnx$/i, "");
+  return `${model}_${localIso(sessionStart).slice(0,19).replace(/:/g,"-")}`;
+}
+
+function exportPredictions(){
+  if(!predLog.length){ log("Nothing to export yet."); return; }
+  const csv = "timestamp,activity\n" + predLog.map(r=>`${localIso(r.time)},${r.activity}`).join("\n") + "\n";
+  const name = `${exportBaseName()}.csv`;
+  downloadFile(name, csv, "text/csv");
   log(`📥 Exported ${predLog.length} rows to ${name}`, "ok");
 }
-document.getElementById("exportBtn").addEventListener("click", exportPredictions);
+
+function exportSensors(){
+  if(!sensorLog.length){ log("No sensor data recorded (enable \"Record sensor data\" in options)."); return; }
+  const csv = "TimeStamp,accel-x,accel-y,accel-z,gyro-x,gyro-y,gyro-z\n"
+    + sensorLog.map(r=>`${localIso(r.time)},${r.values.join(",")}`).join("\n") + "\n";
+  const name = `${exportBaseName()}_sensors.csv`;
+  downloadFile(name, csv, "text/csv");
+  log(`📥 Exported ${sensorLog.length} sensor samples to ${name}`, "ok");
+}
+
+document.getElementById("exportPredBtn").addEventListener("click", exportPredictions);
+document.getElementById("exportSensorBtn").addEventListener("click", exportSensors);
+// Show row counts and disable empty choices each time the export menu opens
+document.getElementById("exportBtn").addEventListener("show.bs.dropdown", ()=>{
+  const pred=document.getElementById("exportPredBtn"), sens=document.getElementById("exportSensorBtn");
+  pred.textContent = `📋 Predictions (${predLog.length} rows)`;
+  sens.textContent = `📈 Sensor data (${sensorLog.length} samples)`;
+  pred.classList.toggle("disabled", !predLog.length);
+  sens.classList.toggle("disabled", !sensorLog.length);
+});
 
 // Same rows as the CSV, but time is relative to the recording start (s.mmm)
 const predTableModal = document.getElementById("predTableModal");
@@ -519,6 +618,10 @@ async function performInference(){
     if(!isRunning) return; // stopped while inferring: don't log a row after RECORD STOP
     const latency = performance.now()-t0;
     const logits = out[Object.keys(out)[0]].data;
+    if(logits.length !== CLASSES.length && !warnedOutputSize){
+      warnedOutputSize = true;
+      log(`Model outputs ${logits.length} values but ${CLASSES.length} classes are defined (${CLASSES.join(", ")}): labels may be wrong`, "warn");
+    }
     const pred = logits.indexOf(Math.max(...logits));
     const label = CLASSES[pred];
     const emoji = CLASS_EMOJI[label] || "🤖";
@@ -532,7 +635,7 @@ async function performInference(){
     logPrediction(label);
     log(`✅ [#${inferenceCount}] Pred=${label} | latency=${latency.toFixed(1)} ms (buffer=${buffer.length})`, "ok");
   } catch(err){
-    log(`❌ [#${inferenceCount}] Inference error: ${err}`, "err");
+    log(`❌ [#${inferenceCount}] Inference error (input shape [1,6,${T}]): ${err}`, "err");
     await rebuildSessionIfNeeded(err);
   } finally {
     document.getElementById("loopStatus").textContent="Loop: idle";
@@ -579,23 +682,36 @@ function resetRun(){
   ["accStats","gyroStats"].forEach(id=>document.getElementById(id).innerHTML="");
   ["predEmoji","predActivity","predTime","predLatency"].forEach(id=>document.getElementById(id).textContent="–");
   predHistory = []; renderHistory();
-  predLog = []; document.getElementById("exportBtn").disabled = true;
+  predLog = []; sensorLog = []; document.getElementById("exportBtn").disabled = true;
 }
 
 function stopRun(){
   isRunning=false;
   window.removeEventListener("devicemotion",handleMotion);
   stopDebugMode();
+  clearTimeout(sensorWatchdog);
   document.getElementById("toggleButton").textContent="Start";
   document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
   if(sessionStart) logPrediction(RECORD_STOP);
   log("Stopped.");
+  if(sessionStart){
+    const secs = (Date.now()-sessionStart)/1000;
+    const preds = predLog.filter(r=>CLASSES.includes(r.activity)).length;
+    log(`Session summary: ${secs.toFixed(1)} s, ${sampleCount} samples (avg ${(sampleCount/secs).toFixed(1)} Hz, target ${config.rate} Hz), ${preds} predictions${config.recordSensors ? `, ${sensorLog.length} sensor samples recorded` : ""}`);
+  }
 }
+
+// Mobile browsers pause sensors/timers when the screen locks or the tab is hidden
+document.addEventListener("visibilitychange", ()=>{
+  if(!isRunning) return;
+  if(document.hidden) log("Page hidden (screen locked / tab switched): sensor data and inference may pause", "warn");
+  else log("Page visible again");
+});
 
 // 🧹 Like reloading the page, but keeps the options and the loaded model
 document.getElementById("clearBtn").addEventListener("click", ()=>{
   if(starting) return;
-  if(predLog.length && !confirm(`Discard ${predLog.length} logged rows that may not have been exported?`)) return;
+  if((predLog.length || sensorLog.length) && !confirm(`Discard ${predLog.length} prediction rows and ${sensorLog.length} sensor samples that may not have been exported?`)) return;
   if(isRunning) stopRun();
   resetRun();
   sessionStart = null; sessionModel = null;
@@ -610,7 +726,9 @@ let starting=false; // guards against double clicks while Start is still loading
 const beeps = { small: new Audio("sounds/small_beep.mp3"), long: new Audio("sounds/long_beep.mp3") };
 Object.values(beeps).forEach(a=>a.preload="auto");
 
-function playBeep(a){ a.currentTime=0; a.play().catch(e=>console.warn("beep failed:", e)); }
+Object.entries(beeps).forEach(([k,a])=>a.addEventListener("error", ()=>log(`Could not load ${a.src.split("/").slice(-2).join("/")} (${k} beep)`, "warn")));
+
+function playBeep(a){ a.currentTime=0; a.play().catch(e=>log(`Beep failed to play: ${e.message}`, "warn")); }
 
 // Mobile browsers (iOS) only allow audio started from a user gesture: play muted once inside the click
 function unlockBeeps(){
@@ -635,10 +753,14 @@ document.getElementById("toggleButton").onclick = async ()=>{
     const debug=config.debug;
     if(config.countdown>0) unlockBeeps();
     // Ask for sensor permission first: iOS requires it directly inside the click gesture
-    if(!debug && DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
+    if(!debug && typeof DeviceMotionEvent==="undefined"){
+      log("This browser has no motion sensor API (DeviceMotionEvent); enable Debug Data in options to test", "err");
+      return;
+    }
+    if(!debug && typeof DeviceMotionEvent.requestPermission==="function"){
       // requestPermission() resolves to "denied" (it doesn't throw) when the user refuses
-      let perm; try{ perm = await DeviceMotionEvent.requestPermission(); } catch(e){ perm = "denied"; }
-      if(perm !== "granted"){ alert("Motion sensor permission denied"); return; }
+      let perm; try{ perm = await DeviceMotionEvent.requestPermission(); } catch(e){ perm = "denied"; log(`Motion permission request failed: ${e.message}`, "err"); }
+      if(perm !== "granted"){ log(`Motion sensor permission: ${perm}`, "err"); alert("Motion sensor permission denied"); return; }
     }
     starting=true;
     document.getElementById("toggleButton").disabled=true;
@@ -650,14 +772,25 @@ document.getElementById("toggleButton").onclick = async ()=>{
     starting=false;
     document.getElementById("toggleButton").disabled=false;
 
+    if(!session){ log("Starting without a loaded model: inference is skipped until it loads (see the error above)", "warn"); }
+    if(samplesPerWindow() !== 60)
+      log(`Rate ${config.rate} Hz gives ${samplesPerWindow()} samples per ${WINDOW_SEC} s window; the model expects 60 (20 Hz) and will likely fail`, "warn");
+
     sessionStart = new Date(); sessionModel = currentModel;
+    sampleCount = 0; warnedOutputSize = false; warnedNullSensor = false;
     logPrediction(RECORD_START);
+    log(`Recording started: model=${sessionModel.replace(/^.*\//, "")}, rate=${config.rate} Hz, accel=${config.accType}, gyro=${config.gyroUnit}, source=${debug ? "debug" : "sensors"}, recordSensors=${config.recordSensors}`);
     isRunning=true;
     if(debug){
       startDebugMode(); log("Debug mode active.");
     } else {
       window.addEventListener("devicemotion",handleMotion);
       log("Sensor capture started.");
+      // devicemotion never fires on desktops / without permission: say so instead of waiting silently
+      sensorWatchdog = setTimeout(()=>{
+        if(isRunning && sampleCount===0)
+          log("No motion sensor data after 3 s: device may lack sensors, or the page needs HTTPS/permission (use Debug Data to test)", "err");
+      }, 3000);
     }
     startInferenceLoop();
     document.getElementById("toggleButton").textContent="Stop";
