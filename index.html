@@ -53,6 +53,7 @@
       </select>
       <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#optionsModal" title="Options">⚙️</button>
       <button id="exportBtn" class="btn btn-outline-secondary" title="Export predictions (CSV)" disabled>📥</button>
+      <button id="clearBtn" class="btn btn-outline-secondary" title="Clear everything (keeps options)">🧹</button>
     </div>
 
     <!-- Options modal: values are only committed to `config` on Apply -->
@@ -83,6 +84,7 @@
             <div class="form-check"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug Data</label></div>
           </div>
           <div class="modal-footer">
+            <button type="button" id="restoreDefaults" class="btn btn-link me-auto px-0" title="Fill the form with default values (press Apply to keep them)">Restore defaults</button>
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
             <button type="button" id="applyOptions" class="btn btn-primary">Apply</button>
           </div>
@@ -170,7 +172,8 @@ Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:
 Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
 /* ====== OPTIONS (modal) ====== */
-const config = { rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0 };
+const DEFAULT_CONFIG = Object.freeze({ rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0 });
+const config = { ...DEFAULT_CONFIG };
 const optionsModal = document.getElementById("optionsModal");
 
 function readOptionsForm(){
@@ -182,16 +185,18 @@ function readOptionsForm(){
     countdown: parseInt(document.getElementById("countdownSelect").value)||0,
   };
 }
-function fillOptionsForm(){
-  document.getElementById("rateSelect").value = config.rate;
-  document.getElementById("gyroUnit").value = config.gyroUnit;
-  document.getElementById("accType").value = config.accType;
-  document.getElementById("debugMode").checked = config.debug;
-  document.getElementById("countdownSelect").value = config.countdown;
+function fillOptionsForm(cfg=config){
+  document.getElementById("rateSelect").value = cfg.rate;
+  document.getElementById("gyroUnit").value = cfg.gyroUnit;
+  document.getElementById("accType").value = cfg.accType;
+  document.getElementById("debugMode").checked = cfg.debug;
+  document.getElementById("countdownSelect").value = cfg.countdown;
 }
 
 // Reset the form to the applied config every time the modal opens (discards cancelled edits)
-optionsModal.addEventListener("show.bs.modal", fillOptionsForm);
+optionsModal.addEventListener("show.bs.modal", ()=>fillOptionsForm());
+// Only fills the form; like any other edit it takes effect on Apply
+document.getElementById("restoreDefaults").addEventListener("click", ()=>fillOptionsForm(DEFAULT_CONFIG));
 
 document.getElementById("applyOptions").addEventListener("click", ()=>{
   const next = readOptionsForm();
@@ -536,6 +541,27 @@ function resetRun(){
   predLog = []; document.getElementById("exportBtn").disabled = true;
 }
 
+function stopRun(){
+  isRunning=false;
+  window.removeEventListener("devicemotion",handleMotion);
+  stopDebugMode();
+  document.getElementById("toggleButton").textContent="Start";
+  document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
+  log("Stopped.");
+}
+
+// 🧹 Like reloading the page, but keeps the options and the loaded model
+document.getElementById("clearBtn").addEventListener("click", ()=>{
+  if(starting) return;
+  if(predLog.length && !confirm(`Discard ${predLog.length} predictions that may not have been exported?`)) return;
+  if(isRunning) stopRun();
+  resetRun();
+  sessionStart = null; sessionModel = null;
+  document.getElementById("loopStatus").textContent = "Loop: idle";
+  document.getElementById("consoleBox").innerHTML = "";
+  log("🧹 Cleared.");
+});
+
 let starting=false; // guards against double clicks while Start is still loading the model / counting down
 
 /* ====== START COUNTDOWN ====== */
@@ -562,12 +588,7 @@ async function runCountdown(seconds){
 document.getElementById("toggleButton").onclick = async ()=>{
   if(starting) return;
   if(isRunning){
-    isRunning=false;
-    window.removeEventListener("devicemotion",handleMotion);
-    stopDebugMode();
-    document.getElementById("toggleButton").textContent="Start";
-    document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
-    log("Stopped.");
+    stopRun();
   } else {
     const debug=config.debug;
     if(config.countdown>0) unlockBeeps();
