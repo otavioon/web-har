@@ -47,7 +47,7 @@
     <h1>📱 WebHAR – Real-Time HAR Dashboard</h1>
 
     <div class="d-flex flex-nowrap align-items-center gap-2 mb-3">
-      <button id="toggleButton" class="btn btn-success">Start</button>
+      <button id="toggleButton" class="btn btn-success" style="min-width:5rem">Start</button>
       <select id="modelSelect" class="form-select w-auto" style="min-width:0" title="not loaded">
         <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
       </select>
@@ -75,6 +75,10 @@
             <div class="input-group">
               <span class="input-group-text">Accel</span>
               <select id="accType" class="form-select"><option value="linear" selected>Linear</option><option value="gravity">Incl. Gravity</option></select>
+            </div>
+            <div class="input-group">
+              <span class="input-group-text">Countdown</span>
+              <select id="countdownSelect" class="form-select"><option value="0" selected>Disabled</option><option value="3">3 s</option><option value="5">5 s</option><option value="10">10 s</option></select>
             </div>
             <div class="form-check"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug Data</label></div>
           </div>
@@ -166,7 +170,7 @@ Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:
 Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
 
 /* ====== OPTIONS (modal) ====== */
-const config = { rate:20, gyroUnit:"rads", accType:"linear", debug:false };
+const config = { rate:20, gyroUnit:"rads", accType:"linear", debug:false, countdown:0 };
 const optionsModal = document.getElementById("optionsModal");
 
 function readOptionsForm(){
@@ -175,6 +179,7 @@ function readOptionsForm(){
     gyroUnit: document.getElementById("gyroUnit").value,
     accType: document.getElementById("accType").value,
     debug: document.getElementById("debugMode").checked,
+    countdown: parseInt(document.getElementById("countdownSelect").value)||0,
   };
 }
 function fillOptionsForm(){
@@ -182,6 +187,7 @@ function fillOptionsForm(){
   document.getElementById("gyroUnit").value = config.gyroUnit;
   document.getElementById("accType").value = config.accType;
   document.getElementById("debugMode").checked = config.debug;
+  document.getElementById("countdownSelect").value = config.countdown;
 }
 
 // Reset the form to the applied config every time the modal opens (discards cancelled edits)
@@ -530,7 +536,28 @@ function resetRun(){
   predLog = []; document.getElementById("exportBtn").disabled = true;
 }
 
-let starting=false; // guards against double clicks while Start is still loading the model
+let starting=false; // guards against double clicks while Start is still loading the model / counting down
+
+/* ====== START COUNTDOWN ====== */
+const beeps = { small: new Audio("sounds/small_beep.mp3"), long: new Audio("sounds/long_beep.mp3") };
+Object.values(beeps).forEach(a=>a.preload="auto");
+
+function playBeep(a){ a.currentTime=0; a.play().catch(e=>console.warn("beep failed:", e)); }
+
+// Mobile browsers (iOS) only allow audio started from a user gesture: play muted once inside the click
+function unlockBeeps(){
+  Object.values(beeps).forEach(a=>{ a.muted=true; a.play().then(()=>{ a.pause(); a.currentTime=0; a.muted=false; }).catch(()=>{ a.muted=false; }); });
+}
+
+// Show N, N-1, ..., 1 in the Start button, one per second: small beep each second, long beep on the last
+async function runCountdown(seconds){
+  const btn=document.getElementById("toggleButton");
+  for(let s=seconds; s>=1; s--){
+    btn.textContent=`⏱ ${s}`;
+    playBeep(s===1 ? beeps.long : beeps.small);
+    await new Promise(r=>setTimeout(r, 1000));
+  }
+}
 
 document.getElementById("toggleButton").onclick = async ()=>{
   if(starting) return;
@@ -543,6 +570,7 @@ document.getElementById("toggleButton").onclick = async ()=>{
     log("Stopped.");
   } else {
     const debug=config.debug;
+    if(config.countdown>0) unlockBeeps();
     // Ask for sensor permission first: iOS requires it directly inside the click gesture
     if(!debug && DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
       // requestPermission() resolves to "denied" (it doesn't throw) when the user refuses
@@ -554,6 +582,8 @@ document.getElementById("toggleButton").onclick = async ()=>{
     log("🔄 Resetting run state and reloading model...");
     resetRun();
     await createSession();
+    // Model is loaded before counting down, so capture begins right after the last beep
+    if(config.countdown>0){ log(`⏱ Starting in ${config.countdown} s...`); await runCountdown(config.countdown); }
     starting=false;
     document.getElementById("toggleButton").disabled=false;
 
