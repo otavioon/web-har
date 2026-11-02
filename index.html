@@ -11,13 +11,20 @@
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
   <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
   <style>
     body { background:#f5f7fa; font-family:"Inter",sans-serif; padding:1.5rem; }
-    .value-card,.prediction-card,.console-card {
+    .prediction-card,.console-card {
       background:#fff;border-radius:.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:1rem;text-align:center;
     }
-    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;}
+    .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:9rem;overflow:hidden;padding:.75rem 1rem;}
+    .prediction-card div{white-space:nowrap;}
+    #predHistory{display:flex;justify-content:center;gap:.4rem;margin-top:.5rem;padding-top:.5rem;border-top:1px solid rgba(0,123,255,.15);}
+    #predHistory .slot{width:2.6rem;height:2.6rem;display:flex;align-items:center;justify-content:center;font-size:1.4rem;border-radius:.5rem;background:rgba(0,123,255,.06);opacity:.55;}
+    #predHistory .slot.current{opacity:1;background:rgba(0,123,255,.15);outline:2px solid rgba(0,123,255,.4);}
+    #predLabel{font-size:1.4rem;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+    #predEmoji{font-size:2rem;vertical-align:middle;}
     .plot-container{background:white;border-radius:.75rem;padding:1rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);margin-top:1rem;}
     .small-text{font-size:.9rem;color:#555;}
     #consoleBox{
@@ -25,7 +32,13 @@
       text-align:left;overflow-y:auto;max-height:260px;padding:.5rem;border-radius:.5rem;
       white-space:pre-wrap; word-wrap:break-word;
     }
-    .badge-soft { background: #f1f5ff; color: #335; border-radius: .5rem; padding:.2rem .5rem; }
+    :root { --axis-x:#f4a3a8; --axis-y:#a8d8b9; --axis-z:#a7c7e7; }
+    .axis-x,.axis-y,.axis-z{color:#333;border-radius:.35rem;padding:0 .35rem;}
+    .axis-x{background:var(--axis-x);} .axis-y{background:var(--axis-y);} .axis-z{background:var(--axis-z);}
+    .plot-container h5{margin-bottom:.25rem;}
+    .raw-row{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.25rem 1rem;border-top:1px solid #eee;padding-top:.5rem;}
+    #modelSelect.model-ok{background-color:rgba(25,135,84,.18);border-color:rgba(25,135,84,.5);}
+    #modelSelect.model-error{background-color:rgba(220,53,69,.18);border-color:rgba(220,53,69,.5);}
   </style>
 </head>
 
@@ -33,57 +46,73 @@
   <div class="container">
     <h1>📱 WebHAR – Real-Time HAR Dashboard</h1>
 
-    <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
-      <label class="form-label mb-0">Model:</label>
-      <select id="modelSelect" class="form-select w-auto">
+    <div class="d-flex flex-nowrap align-items-center gap-2 mb-3">
+      <button id="toggleButton" class="btn btn-success">Start</button>
+      <select id="modelSelect" class="form-select w-auto" style="min-width:0" title="not loaded">
         <!-- Filled at runtime; falls back to cnnpf_loo_ms_erm.onnx -->
       </select>
-      <span id="modelStatus" class="badge-soft">not loaded</span>
-
-      <label class="form-label mb-0 ms-3">Rate (Hz):</label>
-      <input id="rateSelect" type="number" min="1" max="100" value="20" class="form-control w-auto" />
-      <label class="form-label mb-0">Gyro:</label>
-      <select id="gyroUnit" class="form-select w-auto"><option value="rads" selected>rad/s</option><option value="degs">°/s</option></select>
-      <label class="form-label mb-0">Accel:</label>
-      <select id="accType" class="form-select w-auto"><option value="linear" selected>Linear</option><option value="gravity">Incl. Gravity</option></select>
-      <div class="form-check ms-2"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug Data</label></div>
-      <button id="toggleButton" class="btn btn-success ms-2">Start</button>
-      <button id="restartBtn" class="btn btn-outline-secondary">Restart Inference</button>
+      <button class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#optionsModal" title="Options">⚙️</button>
     </div>
 
-    <div class="row text-center">
-      <div class="col-md-6">
-        <div class="value-card">
-          <h5>Accelerometer (<span id="accUnit">m/s²</span>)</h5>
-          <div>X:<span id="ax">0</span> &nbsp; Y:<span id="ay">0</span> &nbsp; Z:<span id="az">0</span></div>
-          <hr><div id="accStats" class="small-text"></div>
+    <!-- Options modal: values are only committed to `config` on Apply -->
+    <div class="modal fade" id="optionsModal" tabindex="-1" aria-labelledby="optionsTitle" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="optionsTitle">⚙️ Options</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body d-grid gap-3">
+            <div class="input-group">
+              <span class="input-group-text">Rate (Hz)</span>
+              <input id="rateSelect" type="number" min="1" max="100" value="20" class="form-control" />
+            </div>
+            <div class="input-group">
+              <span class="input-group-text">Gyro</span>
+              <select id="gyroUnit" class="form-select"><option value="rads" selected>rad/s</option><option value="degs">°/s</option></select>
+            </div>
+            <div class="input-group">
+              <span class="input-group-text">Accel</span>
+              <select id="accType" class="form-select"><option value="linear" selected>Linear</option><option value="gravity">Incl. Gravity</option></select>
+            </div>
+            <div class="form-check"><input class="form-check-input" type="checkbox" id="debugMode"><label class="form-check-label" for="debugMode">Debug Data</label></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" id="applyOptions" class="btn btn-primary">Apply</button>
+          </div>
         </div>
       </div>
-      <div class="col-md-6">
-        <div class="value-card">
-          <h5>Gyroscope (<span id="gyroUnitLabel">rad/s</span>)</h5>
-          <div>X:<span id="gx">0</span> &nbsp; Y:<span id="gy">0</span> &nbsp; Z:<span id="gz">0</span></div>
-          <hr><div id="gyroStats" class="small-text"></div>
+    </div>
+
+    <div class="prediction-card">
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div id="predLabel">
+          <span id="predEmoji">–</span>
+          <span id="predActivity">–</span>
+        </div>
+        <div class="small-text fw-normal text-end">
+          <span id="predTime">–</span> (<span id="predLatency">–</span>)
+          <div id="loopStatus">Loop: idle</div>
         </div>
       </div>
+      <!-- Last HISTORY_LEN predictions, oldest left, current rightmost -->
+      <div id="predHistory"></div>
     </div>
 
-    <div class="prediction-card mt-4">
-      Predicted Activity:
-      <div style="font-size:2rem; line-height:1.2;">
-        <span id="predEmoji">–</span>
-        <span id="predActivity">–</span>
+    <div class="plot-container">
+      <h5>Accelerometer (<span id="accUnit">m/s²</span>)</h5><div id="accPlot"></div>
+      <div class="raw-row small-text">
+        <span><span class="axis-x">X: <b id="ax">0</b></span> &nbsp; <span class="axis-y">Y: <b id="ay">0</b></span> &nbsp; <span class="axis-z">Z: <b id="az">0</b></span></span>
+        <span id="accStats" class="text-end"></span>
       </div>
-      <span id="predTime">Last inference: –</span><br>
-      <span id="predLatency">Inference time: –</span>
-      <div class="small-text mt-1" id="loopStatus">Loop: idle</div>
-    </div>
-
-    <div class="plot-container mt-4">
-      <h5>Accelerometer (m/s²)</h5><div id="accPlot"></div>
     </div>
     <div class="plot-container">
-      <h5>Gyroscope (rad/s)</h5><div id="gyroPlot"></div>
+      <h5>Gyroscope (<span id="gyroUnitLabel">rad/s</span>)</h5><div id="gyroPlot"></div>
+      <div class="raw-row small-text">
+        <span><span class="axis-x">X: <b id="gx">0</b></span> &nbsp; <span class="axis-y">Y: <b id="gy">0</b></span> &nbsp; <span class="axis-z">Z: <b id="gz">0</b></span></span>
+        <span id="gyroStats" class="text-end"></span>
+      </div>
     </div>
 
     <div class="console-card mt-4">
@@ -97,19 +126,20 @@
 /* ====== CONFIG / STATE ====== */
 const CLASSES=["sit","stand","walk","climb up","climb down","run"];
 const CLASS_EMOJI = {
-  "sit":"🪑", "stand":"🧍", "walk":"🚶", "climb up":"🪜⬆️", "climb down":"🪜⬇️", "run":"🏃"
+  "sit":"🪑", "stand":"🧍", "walk":"🚶", "climb up":"⏫", "climb down":"⏬", "run":"🏃"
 };
 let session=null, creatingSession=false, currentModel="models/cnnpf_loo_ms_erm.onnx";
 let isRunning=false, loopRunning=false;
 let buffer=[];
-let SAMPLE_RATE=20;
 const WINDOW_SEC=3, STEP_SEC=1;
-let SAMPLES_PER_WINDOW=WINDOW_SEC*SAMPLE_RATE;
 const STEP_INTERVAL=STEP_SEC*1000;
+const samplesPerWindow = () => Math.round(WINDOW_SEC * config.rate);
 let startTime=null, debugTimer=null;
 let lastSampleTs=0; // throttle devicemotion
 const INFERENCE_TIMEOUT_MS = 4000;
 let inferenceCount = 0;
+const HISTORY_LEN = 6;
+let predHistory = []; // [{label, emoji, ts}], oldest first
 
 /* ====== CONSOLE LOG ====== */
 function log(msg, type="info"){
@@ -125,16 +155,53 @@ function log(msg, type="info"){
 
 /* ====== PLOTS ====== */
 const accData={x:[],y:[],z:[],t:[]}, gyroData={x:[],y:[],z:[],t:[]};
-Plotly.newPlot('accPlot',[
-  {y:[],mode:'lines',name:'X',line:{color:'red'}},
-  {y:[],mode:'lines',name:'Y',line:{color:'green'}},
-  {y:[],mode:'lines',name:'Z',line:{color:'blue'}}
-],{margin:{t:10},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
-Plotly.newPlot('gyroPlot',[
-  {y:[],mode:'lines',name:'X',line:{color:'orange'}},
-  {y:[],mode:'lines',name:'Y',line:{color:'purple'}},
-  {y:[],mode:'lines',name:'Z',line:{color:'teal'}}
-],{margin:{t:10},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
+// Same axis colors for both plots (defined once in CSS :root)
+const rootStyle = getComputedStyle(document.documentElement);
+const axisTraces = ["x","y","z"].map(a=>({y:[],mode:'lines',name:a.toUpperCase(),line:{color:rootStyle.getPropertyValue(`--axis-${a}`).trim()}}));
+const PLOT_HEIGHT = 260;
+Plotly.newPlot('accPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'m/s²'},xaxis:{title:'Time (s)'}});
+Plotly.newPlot('gyroPlot',structuredClone(axisTraces),{height:PLOT_HEIGHT,margin:{t:10,b:40},yaxis:{title:'rad/s'},xaxis:{title:'Time (s)'}});
+
+/* ====== OPTIONS (modal) ====== */
+const config = { rate:20, gyroUnit:"rads", accType:"linear", debug:false };
+const optionsModal = document.getElementById("optionsModal");
+
+function readOptionsForm(){
+  return {
+    rate: Math.min(100, Math.max(1, parseFloat(document.getElementById("rateSelect").value)||20)),
+    gyroUnit: document.getElementById("gyroUnit").value,
+    accType: document.getElementById("accType").value,
+    debug: document.getElementById("debugMode").checked,
+  };
+}
+function fillOptionsForm(){
+  document.getElementById("rateSelect").value = config.rate;
+  document.getElementById("gyroUnit").value = config.gyroUnit;
+  document.getElementById("accType").value = config.accType;
+  document.getElementById("debugMode").checked = config.debug;
+}
+
+// Reset the form to the applied config every time the modal opens (discards cancelled edits)
+optionsModal.addEventListener("show.bs.modal", fillOptionsForm);
+
+document.getElementById("applyOptions").addEventListener("click", ()=>{
+  const next = readOptionsForm();
+  const changes = Object.keys(next).filter(k => next[k] !== config[k]).map(k => `${k}: ${config[k]} → ${next[k]}`);
+  Object.assign(config, next);
+
+  const unit = config.gyroUnit==="rads" ? "rad/s" : "°/s";
+  document.getElementById("gyroUnitLabel").textContent = unit;
+  Plotly.relayout('gyroPlot', {'yaxis.title':unit});
+
+  if(changes.length){
+    log(`⚙️ Config applied: ${changes.join(", ")}`, "ok");
+    if(isRunning && changes.some(c => c.startsWith("debug") || (config.debug && c.startsWith("rate"))))
+      log("⚙️ Stop and Start again to apply the data source/rate change.");
+  } else {
+    log("⚙️ Config applied: no changes");
+  }
+  bootstrap.Modal.getInstance(optionsModal).hide();
+});
 
 /* ====== MODEL DISCOVERY ====== */
 const MODELS_DIR = "models/";
@@ -204,13 +271,19 @@ async function populateModelDropdown() {
 
   // if the current model isn't in the list, use the first
   if (!models.includes(currentModel)) currentModel = models[0];
+}
 
-  document.getElementById("modelStatus").textContent = currentModel.replace(/^models\//, "");
+// Tint the model dropdown by load state: "", "loading", "ok" or "error"
+function setModelStatus(state, title){
+  const el = document.getElementById("modelSelect");
+  el.classList.remove("model-ok","model-error");
+  if(state==="ok") el.classList.add("model-ok");
+  if(state==="error") el.classList.add("model-error");
+  el.title = title || state || "not loaded";
 }
 
 document.getElementById("modelSelect").addEventListener("change", async (e)=>{
   currentModel = e.target.value;
-  document.getElementById("modelStatus").textContent = currentModel.replace(/^models\//, "");
   log(`Model changed to: ${currentModel}`);
   await createSession(); // now loads fresh bytes (no cache)
 });
@@ -220,13 +293,13 @@ document.getElementById("modelSelect").addEventListener("change", async (e)=>{
 async function createSession(){
   if (creatingSession) { log("createSession() already in progress"); return; }
   creatingSession = true;
+  const modelPath = currentModel; // snapshot in case user switches quickly
 
   try{
     // show loading
     document.getElementById("predActivity").textContent = "–";
     document.getElementById("predEmoji").textContent = "–";
-    document.getElementById("modelStatus").textContent = "loading...";
-    const modelPath = currentModel; // snapshot in case user switches quickly
+    setModelStatus("loading", `loading ${modelPath}...`);
     log(`Loading ${modelPath} (WASM, single-thread) ...`);
 
     // Safe WASM config for sensors
@@ -244,22 +317,24 @@ async function createSession(){
 
     session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
 
-    document.getElementById("modelStatus").textContent = modelPath.replace(/^models\//, "");
+    setModelStatus("ok", `loaded ${modelPath}`);
     log(`Model loaded: ${modelPath}`, "ok");
   } catch (e){
     log("Failed to create session: "+e, "err");
     session = null;
-    document.getElementById("modelStatus").textContent = "load error";
+    setModelStatus("error", String(e));
   } finally {
     creatingSession = false;
   }
+  // The user picked another model while this one was loading: load the new pick
+  if (currentModel !== modelPath) await createSession();
 }
 
 
 /* ====== SENSOR / DEBUG FEED ====== */
 function pushSample(ax,ay,az,gx,gy,gz,now){
   buffer.push([ax,ay,az,gx,gy,gz]);
-  if(buffer.length>SAMPLES_PER_WINDOW) buffer.shift();
+  while(buffer.length>samplesPerWindow()) buffer.shift();
 
   // live values
   document.getElementById("ax").textContent=ax.toFixed(2);
@@ -284,27 +359,27 @@ function pushSample(ax,ay,az,gx,gy,gz,now){
 function updateStats(now){
   const stats=a=>({min:Math.min(...a).toFixed(2), max:Math.max(...a).toFixed(2), mean:(a.reduce((x,y)=>x+y,0)/a.length).toFixed(2)});
   if(accData.x.length){ const s=stats(accData.x.concat(accData.y,accData.z));
-    document.getElementById("accStats").innerHTML=`Mean:${s.mean}, Min:${s.min}, Max:${s.max}<br>Samples:${accData.t.length}, Time:${now.toFixed(2)} s`; }
+    document.getElementById("accStats").innerHTML=`Mean:${s.mean} Min:${s.min} Max:${s.max}<br>Samples:${accData.t.length} · Time:${now.toFixed(2)} s`; }
   if(gyroData.x.length){ const s=stats(gyroData.x.concat(gyroData.y,gyroData.z));
-    document.getElementById("gyroStats").innerHTML=`Mean:${s.mean}, Min:${s.min}, Max:${s.max}<br>Samples:${gyroData.t.length}, Time:${now.toFixed(2)} s`; }
+    document.getElementById("gyroStats").innerHTML=`Mean:${s.mean} Min:${s.min} Max:${s.max}<br>Samples:${gyroData.t.length} · Time:${now.toFixed(2)} s`; }
 }
 
 // Throttled real sensor handler
-let lastHz=20;
 function handleMotion(e){
   if(!isRunning) return;
-  const targetHz = parseFloat(document.getElementById("rateSelect").value)||20;
-  if (targetHz !== lastHz) { lastHz = targetHz; SAMPLES_PER_WINDOW = WINDOW_SEC * targetHz; }
-  const interval = 1000/targetHz;
+  const interval = 1000/config.rate;
   const nowTs = performance.now();
   if (nowTs - lastSampleTs < interval) return; // throttle
-  lastSampleTs = nowTs;
+  // Advance on a fixed schedule instead of snapping to the event time, so that event
+  // jitter (e.g. 60 Hz events vs 50 ms slots) doesn't push the real rate below target.
+  // Resync if we fell more than one slot behind (first sample, tab paused, slow device).
+  lastSampleTs = (nowTs - lastSampleTs > 2*interval) ? nowTs : lastSampleTs + interval;
 
   if(!startTime) startTime = performance.now();
   const now = (performance.now()-startTime)/1000;
 
-  const accMode=document.getElementById("accType").value;
-  const gyroMode=document.getElementById("gyroUnit").value;
+  const accMode=config.accType;
+  const gyroMode=config.gyroUnit;
   const acc= accMode==="gravity" ? e.accelerationIncludingGravity : e.acceleration;
   const ax=acc?.x??0, ay=acc?.y??0, az=acc?.z??0;
   let gx=e.rotationRate?.beta??0, gy=e.rotationRate?.gamma??0, gz=e.rotationRate?.alpha??0;
@@ -314,8 +389,7 @@ function handleMotion(e){
 
 // Debug generator
 function startDebugMode(){
-  SAMPLE_RATE=parseFloat(document.getElementById("rateSelect").value)||20;
-  const dt=1000/SAMPLE_RATE; let t0=performance.now();
+  const dt=1000/config.rate; let t0=performance.now();
   debugTimer=setInterval(()=>{
     const now=(performance.now()-t0)/1000;
     const ax=Math.sin(now*2*Math.PI*1.5)+(Math.random()-0.5)*0.2;
@@ -337,14 +411,30 @@ async function safeRun(tensor){
   return Promise.race([ session.run({ input: tensor }), timeoutPromise(INFERENCE_TIMEOUT_MS) ]);
 }
 
+// Always render HISTORY_LEN slots (empty ones padded on the left) so the card never changes size
+function renderHistory(){
+  const pad = Array(HISTORY_LEN - predHistory.length).fill(null);
+  document.getElementById("predHistory").innerHTML = pad.concat(predHistory).map((p,i)=>
+    `<div class="slot${p && i===HISTORY_LEN-1 ? " current" : ""}" title="${p ? `${p.label} @ ${p.ts}` : ""}">${p ? p.emoji : ""}</div>`
+  ).join("");
+}
+function pushHistory(label, emoji, ts){
+  predHistory.push({label, emoji, ts});
+  if(predHistory.length > HISTORY_LEN) predHistory.shift();
+  renderHistory();
+}
+
 async function performInference(){
   if(!isRunning) return;
   if(!session){ log("⚠️ No session; skipping inference."); return; }
-  const effectiveSamples = WINDOW_SEC * (parseFloat(document.getElementById("rateSelect").value)||20);
+  const effectiveSamples = samplesPerWindow();
   if(buffer.length < effectiveSamples){ return; }
 
   const arr=buffer.slice(-effectiveSamples);
-  const tensor=new ort.Tensor("float32", new Float32Array(arr.flat()), [1,6,60]); // model expects 60 @ 20Hz*3s
+  // buffer is time-major [T][6]; model expects (B, C, T) = [1, 6, T], so lay out channel-major: data[c*T + t]
+  const T=arr.length, data=new Float32Array(6*T);
+  for(let t=0;t<T;t++) for(let c=0;c<6;c++) data[c*T+t]=arr[t][c];
+  const tensor=new ort.Tensor("float32", data, [1,6,T]); // model expects T=60 @ 20Hz*3s
   const t0=performance.now();
   try{
     document.getElementById("loopStatus").textContent="Loop: running";
@@ -352,16 +442,17 @@ async function performInference(){
 //    log(`🧠 [#${inferenceCount}] Running inference... (buffer=${buffer.length})`);
     const out = await safeRun(tensor);
     const latency = performance.now()-t0;
-    const data = out[Object.keys(out)[0]].data;
-    const pred = data.indexOf(Math.max(...data));
+    const logits = out[Object.keys(out)[0]].data;
+    const pred = logits.indexOf(Math.max(...logits));
     const label = CLASSES[pred];
     const emoji = CLASS_EMOJI[label] || "🤖";
     const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
     document.getElementById("predEmoji").textContent = emoji;
     document.getElementById("predActivity").textContent = label;
-    document.getElementById("predTime").textContent = "Last inference: " + ts;
-    document.getElementById("predLatency").textContent = "Inference time: " + latency.toFixed(1) + " ms";
+    document.getElementById("predTime").textContent = ts;
+    document.getElementById("predLatency").textContent = latency.toFixed(1) + " ms";
+    pushHistory(label, emoji, ts);
     log(`✅ [#${inferenceCount}] Pred=${label} | latency=${latency.toFixed(1)} ms (buffer=${buffer.length})`, "ok");
   } catch(err){
     log(`❌ [#${inferenceCount}] Inference error: ${err}`, "err");
@@ -402,9 +493,21 @@ async function startInferenceLoop(){
 }
 
 /* ====== UI BUTTONS ====== */
-document.getElementById("toggleButton").onclick = async ()=>{
-  if(!session) await createSession();
+// Clear all run state (buffers, plots, readouts, prediction); config is kept
+function resetRun(){
+  startTime=null; lastSampleTs=0; buffer.length=0; inferenceCount = 0;
+  [accData,gyroData].forEach(d=>{ d.x.length=0; d.y.length=0; d.z.length=0; d.t.length=0; });
+  ["accPlot","gyroPlot"].forEach(id=>Plotly.update(id,{x:[[],[],[]], y:[[],[],[]]}, {xaxis:{range:[0,5]}}));
+  ["ax","ay","az","gx","gy","gz"].forEach(id=>document.getElementById(id).textContent="0");
+  ["accStats","gyroStats"].forEach(id=>document.getElementById(id).innerHTML="");
+  ["predEmoji","predActivity","predTime","predLatency"].forEach(id=>document.getElementById(id).textContent="–");
+  predHistory = []; renderHistory();
+}
 
+let starting=false; // guards against double clicks while Start is still loading the model
+
+document.getElementById("toggleButton").onclick = async ()=>{
+  if(starting) return;
   if(isRunning){
     isRunning=false;
     window.removeEventListener("devicemotion",handleMotion);
@@ -413,15 +516,25 @@ document.getElementById("toggleButton").onclick = async ()=>{
     document.getElementById("toggleButton").classList.replace("btn-danger","btn-success");
     log("Stopped.");
   } else {
+    const debug=config.debug;
+    // Ask for sensor permission first: iOS requires it directly inside the click gesture
+    if(!debug && DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
+      // requestPermission() resolves to "denied" (it doesn't throw) when the user refuses
+      let perm; try{ perm = await DeviceMotionEvent.requestPermission(); } catch(e){ perm = "denied"; }
+      if(perm !== "granted"){ alert("Motion sensor permission denied"); return; }
+    }
+    starting=true;
+    document.getElementById("toggleButton").disabled=true;
+    log("🔄 Resetting run state and reloading model...");
+    resetRun();
+    await createSession();
+    starting=false;
+    document.getElementById("toggleButton").disabled=false;
+
     isRunning=true;
-    startTime=null; lastSampleTs=0; buffer.length=0; inferenceCount = 0;
-    const debug=document.getElementById("debugMode").checked;
     if(debug){
       startDebugMode(); log("Debug mode active.");
     } else {
-      if(DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==="function"){
-        try{ await DeviceMotionEvent.requestPermission(); } catch(e){ alert("Permission denied"); isRunning=false; return; }
-      }
       window.addEventListener("devicemotion",handleMotion);
       log("Sensor capture started.");
     }
@@ -431,14 +544,9 @@ document.getElementById("toggleButton").onclick = async ()=>{
   }
 };
 
-document.getElementById("restartBtn").onclick = async ()=>{
-  log("🔄 Manual restart requested.");
-  await createSession();
-  if(isRunning && !loopRunning) startInferenceLoop();
-};
-
 /* ====== BOOT ====== */
 (async function boot(){
+  renderHistory();
   await populateModelDropdown();
   log(`Initial model: ${currentModel}`);
   await createSession(); // pre-load
