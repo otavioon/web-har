@@ -19,7 +19,7 @@
 
   <style>
     body { background:#f5f7fa; font-family:"Inter",sans-serif; padding:1.5rem; }
-    .prediction-card,.console-card {
+    .prediction-card {
       background:#fff;border-radius:.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.1);padding:1rem;text-align:center;
     }
     .prediction-card{background:#eef7ff;color:#007bff;font-weight:700;font-size:1.5rem;height:9.25rem;overflow:hidden;padding:.5rem .85rem .3rem;cursor:pointer;}
@@ -35,7 +35,7 @@
     .small-text{font-size:.9rem;color:#555;}
     #consoleBox{
       background:#111;color:#0f0;font-family:monospace;font-size:.9rem;
-      text-align:left;overflow-y:auto;max-height:260px;padding:.5rem;border-radius:.5rem;
+      text-align:left;overflow-y:auto;height:60vh;padding:.5rem;border-radius:.5rem;
       white-space:pre-wrap; word-wrap:break-word;
     }
     :root { --axis-x:#f4a3a8; --axis-y:#a8d8b9; --axis-z:#a7c7e7; }
@@ -72,6 +72,22 @@
       </div>
       <button id="clearBtn" class="btn btn-outline-secondary" title="Clear everything (keeps options)">🧹</button>
       <button id="wakeBtn" class="btn btn-outline-secondary" title="Keep screen on">🔅</button>
+      <button id="consoleBtn" class="btn btn-outline-secondary position-relative" title="Console output" data-bs-toggle="modal" data-bs-target="#consoleModal">🖥️<span id="consoleBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none">0</span></button>
+    </div>
+
+    <!-- Console output (🖥️ button) -->
+    <div class="modal fade" id="consoleModal" tabindex="-1" aria-labelledby="consoleTitle" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="consoleTitle">🖥️ Console Output</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-2">
+            <div id="consoleBox">[ready]</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Shown on load when the browser isn't Firefox -->
@@ -194,10 +210,6 @@
       </div>
     </div>
 
-    <div class="console-card mt-4">
-      <h5>Console Output</h5>
-      <div id="consoleBox">[ready]</div>
-    </div>
   </div>
 
 <script>
@@ -248,6 +260,20 @@ let warnedOutputSize = false, warnedNullSensor = false, sampleCount = 0;
 let sensorWatchdog = null; // warns if no motion events arrive after Start
 
 /* ====== CONSOLE LOG ====== */
+// Console lives in a modal; the 🖥️ button shows a badge with warnings/errors logged while it was closed
+let consoleOpen = false, consoleUnread = 0;
+function setConsoleBadge(n){
+  consoleUnread = n;
+  const badge = document.getElementById("consoleBadge");
+  badge.textContent = n > 99 ? "99+" : n;
+  badge.classList.toggle("d-none", n === 0);
+}
+const consoleModalEl = document.getElementById("consoleModal");
+consoleModalEl.addEventListener("shown.bs.modal", ()=>{
+  consoleOpen = true; setConsoleBadge(0);
+  const box = document.getElementById("consoleBox"); box.scrollTop = box.scrollHeight;
+});
+consoleModalEl.addEventListener("hidden.bs.modal", ()=>{ consoleOpen = false; });
 let consoleLines = []; // full plain-text history for export (the on-page box keeps only the last 600)
 function log(msg, type="info"){
   const box=document.getElementById("consoleBox");
@@ -258,6 +284,7 @@ function log(msg, type="info"){
   box.innerHTML += `<span style="color:${color}">[${time}] ${safe}</span><br>`;
   const lines=box.innerHTML.split("<br>"); if(lines.length>600) box.innerHTML=lines.slice(-600).join("<br>");
   box.scrollTop=box.scrollHeight;
+  if((type==="err"||type==="warn") && !consoleOpen) setConsoleBadge(consoleUnread+1);
   (type==="err"?console.error:type==="warn"?console.warn:console.log)(msg);
 }
 
@@ -906,7 +933,7 @@ function clearAll(){
   resetRun();
   sessionStart = null; sessionModel = null;
   document.getElementById("loopStatus").textContent = "Loop: idle";
-  document.getElementById("consoleBox").innerHTML = ""; consoleLines = [];
+  document.getElementById("consoleBox").innerHTML = ""; consoleLines = []; setConsoleBadge(0);
   log("🧹 Cleared.");
   return true;
 }
